@@ -1,0 +1,182 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wikitics
+      POSTGRES_USER: wikitics
+      POSTGRES_PASSWORD: wikitics
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wikitics -d wikitics"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: wikitics
+      MINIO_ROOT_PASSWORD: wikitics-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  livekit:
+    image: livekit/livekit-server:v1.8
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      SECRET_KEY: change-me-in-production
+      DATABASE_URL: postgresql+psycopg://wikitics:wikitics@postgres:5432/wikitics
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      LOCAL_STORAGE_ROOT: /app/storage
+      VECTOR_BACKEND: qdrant
+      LIVEKIT_URL: ws://localhost:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      SARVAM_STT_URL: ${SARVAM_STT_URL:-https://api.sarvam.ai/speech-to-text}
+      SARVAM_STT_STREAM_URL: ${SARVAM_STT_STREAM_URL:-wss://api.sarvam.ai/speech-to-text/ws}
+      SARVAM_STT_MODEL: ${SARVAM_STT_MODEL:-saaras:v3}
+      SARVAM_STT_MODE: ${SARVAM_STT_MODE:-transcribe}
+      SARVAM_STT_LANGUAGE_CODE: ${SARVAM_STT_LANGUAGE_CODE:-unknown}
+      SARVAM_STT_STREAM_SAMPLE_RATE: ${SARVAM_STT_STREAM_SAMPLE_RATE:-16000}
+      SARVAM_STT_INPUT_AUDIO_CODEC: ${SARVAM_STT_INPUT_AUDIO_CODEC:-pcm_s16le}
+      SARVAM_STT_HIGH_VAD_SENSITIVITY: ${SARVAM_STT_HIGH_VAD_SENSITIVITY:-true}
+      SARVAM_STT_VAD_SIGNALS: ${SARVAM_STT_VAD_SIGNALS:-true}
+      SARVAM_STT_FLUSH_SIGNAL: ${SARVAM_STT_FLUSH_SIGNAL:-true}
+      SARVAM_TTS_URL: ${SARVAM_TTS_URL:-https://api.sarvam.ai/text-to-speech}
+      SARVAM_TTS_MODEL: ${SARVAM_TTS_MODEL:-bulbul:v3}
+      SARVAM_TTS_LANGUAGE_CODE: ${SARVAM_TTS_LANGUAGE_CODE:-en-IN}
+      SARVAM_TTS_SPEAKER: ${SARVAM_TTS_SPEAKER:-shubh}
+      SARVAM_TTS_OUTPUT_AUDIO_CODEC: ${SARVAM_TTS_OUTPUT_AUDIO_CODEC:-mp3}
+      SARVAM_TTS_PACE: ${SARVAM_TTS_PACE:-0.95}
+      SARVAM_TTS_TEMPERATURE: ${SARVAM_TTS_TEMPERATURE:-0.45}
+      SARVAM_TTS_WS_URL: ${SARVAM_TTS_WS_URL:-wss://api.sarvam.ai/text-to-speech/ws}
+      SARVAM_TTS_WEBSOCKET_ENABLED: ${SARVAM_TTS_WEBSOCKET_ENABLED:-true}
+      SARVAM_TTS_WS_MIN_BUFFER_SIZE: ${SARVAM_TTS_WS_MIN_BUFFER_SIZE:-50}
+      SARVAM_TTS_WS_MAX_CHUNK_LENGTH: ${SARVAM_TTS_WS_MAX_CHUNK_LENGTH:-200}
+      SARVAM_TTS_WS_OUTPUT_AUDIO_BITRATE: ${SARVAM_TTS_WS_OUTPUT_AUDIO_BITRATE:-128k}
+      SARVAM_TTS_WS_TIMEOUT_SECONDS: ${SARVAM_TTS_WS_TIMEOUT_SECONDS:-30}
+      SARVAM_DOCUMENT_INTELLIGENCE_URL: ${SARVAM_DOCUMENT_INTELLIGENCE_URL:-https://api.sarvam.ai/doc-digitization/job/v1}
+      SARVAM_DOCUMENT_INTELLIGENCE_LANGUAGE: ${SARVAM_DOCUMENT_INTELLIGENCE_LANGUAGE:-en-IN}
+      SARVAM_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT: ${SARVAM_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT:-md}
+      SARVAM_DOCUMENT_INTELLIGENCE_POLL_SECONDS: ${SARVAM_DOCUMENT_INTELLIGENCE_POLL_SECONDS:-2}
+      SARVAM_DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS: ${SARVAM_DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS:-120}
+      SARVAM_DOCUMENT_INTELLIGENCE_MAX_PAGES: ${SARVAM_DOCUMENT_INTELLIGENCE_MAX_PAGES:-10}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
+      OPENROUTER_TITLE_MODEL: ${OPENROUTER_TITLE_MODEL:-openai/gpt-4o-mini}
+      OPENROUTER_SUMMARY_MODEL: ${OPENROUTER_SUMMARY_MODEL:-openai/gpt-4o-mini}
+      OPENROUTER_WIKI_MODEL: ${OPENROUTER_WIKI_MODEL:-google/gemini-2.5-flash}
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      livekit:
+        condition: service_started
+      minio:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+  agent-worker:
+    build:
+      context: ./agent-worker
+    environment:
+      BACKEND_API_URL: http://backend:8000
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      SARVAM_STT_URL: ${SARVAM_STT_URL:-https://api.sarvam.ai/speech-to-text}
+      SARVAM_STT_STREAM_URL: ${SARVAM_STT_STREAM_URL:-wss://api.sarvam.ai/speech-to-text/ws}
+      SARVAM_STT_MODEL: ${SARVAM_STT_MODEL:-saaras:v3}
+      SARVAM_STT_MODE: ${SARVAM_STT_MODE:-transcribe}
+      SARVAM_STT_LANGUAGE_CODE: ${SARVAM_STT_LANGUAGE_CODE:-unknown}
+      SARVAM_STT_STREAM_SAMPLE_RATE: ${SARVAM_STT_STREAM_SAMPLE_RATE:-16000}
+      SARVAM_STT_INPUT_AUDIO_CODEC: ${SARVAM_STT_INPUT_AUDIO_CODEC:-pcm_s16le}
+      SARVAM_STT_HIGH_VAD_SENSITIVITY: ${SARVAM_STT_HIGH_VAD_SENSITIVITY:-true}
+      SARVAM_STT_VAD_SIGNALS: ${SARVAM_STT_VAD_SIGNALS:-true}
+      SARVAM_STT_FLUSH_SIGNAL: ${SARVAM_STT_FLUSH_SIGNAL:-true}
+      SARVAM_TTS_URL: ${SARVAM_TTS_URL:-https://api.sarvam.ai/text-to-speech}
+      SARVAM_TTS_MODEL: ${SARVAM_TTS_MODEL:-bulbul:v3}
+      SARVAM_TTS_LANGUAGE_CODE: ${SARVAM_TTS_LANGUAGE_CODE:-en-IN}
+      SARVAM_TTS_SPEAKER: ${SARVAM_TTS_SPEAKER:-shubh}
+      SARVAM_TTS_OUTPUT_AUDIO_CODEC: ${SARVAM_TTS_OUTPUT_AUDIO_CODEC:-mp3}
+      SARVAM_TTS_PACE: ${SARVAM_TTS_PACE:-0.95}
+      SARVAM_TTS_TEMPERATURE: ${SARVAM_TTS_TEMPERATURE:-0.45}
+      SARVAM_TTS_WS_URL: ${SARVAM_TTS_WS_URL:-wss://api.sarvam.ai/text-to-speech/ws}
+      SARVAM_TTS_WEBSOCKET_ENABLED: ${SARVAM_TTS_WEBSOCKET_ENABLED:-true}
+      SARVAM_TTS_WS_MIN_BUFFER_SIZE: ${SARVAM_TTS_WS_MIN_BUFFER_SIZE:-50}
+      SARVAM_TTS_WS_MAX_CHUNK_LENGTH: ${SARVAM_TTS_WS_MAX_CHUNK_LENGTH:-200}
+      SARVAM_TTS_WS_OUTPUT_AUDIO_BITRATE: ${SARVAM_TTS_WS_OUTPUT_AUDIO_BITRATE:-128k}
+      SARVAM_TTS_WS_TIMEOUT_SECONDS: ${SARVAM_TTS_WS_TIMEOUT_SECONDS:-30}
+      SARVAM_DOCUMENT_INTELLIGENCE_URL: ${SARVAM_DOCUMENT_INTELLIGENCE_URL:-https://api.sarvam.ai/doc-digitization/job/v1}
+      SARVAM_DOCUMENT_INTELLIGENCE_LANGUAGE: ${SARVAM_DOCUMENT_INTELLIGENCE_LANGUAGE:-en-IN}
+      SARVAM_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT: ${SARVAM_DOCUMENT_INTELLIGENCE_OUTPUT_FORMAT:-md}
+      SARVAM_DOCUMENT_INTELLIGENCE_POLL_SECONDS: ${SARVAM_DOCUMENT_INTELLIGENCE_POLL_SECONDS:-2}
+      SARVAM_DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS: ${SARVAM_DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS:-120}
+      SARVAM_DOCUMENT_INTELLIGENCE_MAX_PAGES: ${SARVAM_DOCUMENT_INTELLIGENCE_MAX_PAGES:-10}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
+      OPENROUTER_TITLE_MODEL: ${OPENROUTER_TITLE_MODEL:-openai/gpt-4o-mini}
+      OPENROUTER_SUMMARY_MODEL: ${OPENROUTER_SUMMARY_MODEL:-openai/gpt-4o-mini}
+    depends_on:
+      - backend
+      - livekit
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  minio_data:
+  backend_storage:

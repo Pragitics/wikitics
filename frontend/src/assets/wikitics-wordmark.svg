@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 180" fill="none">
+  <style>
+    .wordmark {
+      font-family: "Snell Roundhand", "Apple Chancery", "Brush Script MT", "Segoe Script", cursive;
+      fill: #111111;
+      font-weight: 400;
+    }
+  </style>
+  <text x="12" y="150" class="wordmark" font-size="176">W</text>
+  <text x="158" y="136" class="wordmark" font-size="112">ikitics</text>
+</svg>

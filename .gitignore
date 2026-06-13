@@ -179,3 +179,297 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Node / frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.vite/
+vite.config.*.timestamp-*
+vite.config.*.mjs
+
+# Local Wikitics runtime data
+data/
+/storage/
+backend/storage/
+backend/wikitics.db*
+backend/test-storage/
+test-storage/
+wikitics.db*
+test-wikitics.db*
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Docker / compose local overrides
+docker-compose.override.yml
+.docker-data/
+docker-data/
+
+# Secrets and local environment
+.env.*
+!.env.example
+
+# Test and build artifacts
+junit.xml
+playwright-report/
+test-results/
+.playwright-mcp/
+frontend-console*.log
+backend/.coverage
+backend/htmlcov/
+frontend/coverage/
+frontend/.nyc_output/
+agent-worker/.pytest_cache/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.atom/
+.brackets.json
+*.code-workspace
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# Local manual test documents kept outside committed fixtures
+/Softrate Workspace document .docx
+/WikiTics.png
+
+# Generated Python package marker files in the scaffolded app tree
+backend/app/**/__init__.py
+agent-worker/**/__init__.py
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+*.diff
+*.patch
+*~
+
+# Log files
+*.log
+logs/
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+.output/
+
+# Package manager locks (optional - uncomment if needed)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Python virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+virtualenv/
+pipenv/
+
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+.eggs/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Qdrant data
+qdrant_data/
+qdrant_storage/
+
+# MinIO/S3 local storage
+minio_data/
+s3_data/
+
+# Redis dumps
+dump.rdb
+appendonly.aof
+
+# Docker volumes and data
+postgres_data/
+redis_data/
+backend_storage/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.pytest_cache/
+
+# Profiling data
+*.prof
+*.lprof
+.profiling/
+
+# Security and secrets
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/
+.secrets/
+
+# Large media files (if any)
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.mkv
+*.webm
+*.mp3
+*.wav
+*.flac
+*.aac
+
+# Compressed archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.bz2
+*.gz
+*.xz
+
+# Documentation builds
+docs/_build/
+docs/.doctrees/
+site/
+
+# Benchmark results
+benchmark_results/
+*.benchmark
+
+# AI/ML model files (if storing locally)
+*.h5
+*.pkl
+*.pickle
+*.joblib
+*.model
+*.weights
+models/
+checkpoints/
+
+# Temporary upload files
+uploads/
+temp_uploads/
+tmp_files/
+
+# Generated files
+generated/
+auto_generated/
+.generated/
+
+# Backup files
+*.backup
+*.bak
+*~
+.backup/
+
+# System files
+.fuse_hidden*
+.nfs*
+
+# Cloud IDE files
+.c9/
+.cloud9/
+
+# Local configuration overrides
+local_settings.py
+local_config.py
+config.local.js
+.env.local
+.env.*.local
+
+# Sentry
+.sentryclirc
+
+# Vercel
+.vercel
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Kubernetes
+*.kubeconfig
+
+# Monitoring and observability
+.grafana/
+.prometheus/
+
+# Misc
+.scratch/
+scratch/
+TODO.md
+NOTES.md
+.notes/

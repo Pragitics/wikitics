@@ -1,7 +1,7 @@
 from app.domain.retrieval.entities import Citation, SearchResult
 
 
-TECHNICAL_GLOSSARY = "invoice, software, app, website, service, payment, dashboard, login, upload, workspace, document, wiki, RAG"
+TECHNICAL_GLOSSARY = "invoice, software, app, website, service, payment, dashboard, login, upload, workspace, document, wiki"
 VOICE_STYLE_PREFERENCES = {"auto", "english", "hinglish", "tanglish", "regional_mix"}
 HINGLISH_CUES = {
     "haan",

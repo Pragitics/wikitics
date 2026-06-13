@@ -5,16 +5,11 @@ from dataclasses import asdict
 from pathlib import PurePosixPath
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.application.wiki.chunking import chunk_wiki_backlinks, chunk_wiki_index, chunk_wiki_page
-from app.application.wiki.generator import DeterministicWikiGenerator
 from app.application.workspaces.access import ensure_workspace_member
 from app.domain.documents.entities import SUPPORTED_FILE_TYPES, DocumentStatus, ExtractedDocument, ExtractedPage, OCRResult
 from app.infrastructure.db.models import (
-    ChunkModel,
-    CitationModel,
     DocumentModel,
     DocumentVersionModel,
     ExtractedDocumentModel,
@@ -25,6 +20,7 @@ from app.infrastructure.db.models import (
 from app.shared.ids import new_id
 from app.shared.metrics import metrics
 from app.shared.retry import retry_call
+from app.shared.user_errors import DOCUMENT_PROCESSING_FAILED, DOCUMENT_PROCESSING_UNAVAILABLE
 
 
 class DocumentService:
@@ -33,18 +29,16 @@ class DocumentService:
         db: Session,
         storage,
         parser_registry,
-        embeddings,
-        vector_search,
         ocr=None,
         wiki_generator=None,
     ) -> None:
         self.db = db
         self.storage = storage
         self.parser_registry = parser_registry
-        self.embeddings = embeddings
-        self.vector_search = vector_search
         self.ocr = ocr
-        self.wiki_generator = wiki_generator or DeterministicWikiGenerator()
+        if wiki_generator is None:
+            raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE)
+        self.wiki_generator = wiki_generator
 
     async def upload(self, user_id: str, workspace_id: str, file: UploadFile) -> dict:
         ensure_workspace_member(self.db, user_id, workspace_id)
@@ -147,48 +141,20 @@ class DocumentService:
             wiki_models = self._save_wiki_bundle(document, bundle)
             self._set_status(document, DocumentStatus.WIKI_READY)
 
-            self._set_status(document, DocumentStatus.INDEXING)
-            chunks = []
-            document_filenames = self._workspace_document_filenames(document.workspace_id)
-            for wiki_page in wiki_models:
-                chunks.extend(
-                    chunk_wiki_page(
-                        page=_wiki_model_to_entity(wiki_page),
-                        user_id=user_id,
-                        document_filenames=document_filenames,
-                    )
-                )
-            index_content, backlinks = self._workspace_wiki_projection(document.workspace_id)
-            chunks.extend(chunk_wiki_index(document.workspace_id, user_id, index_content))
-            chunks.extend(chunk_wiki_backlinks(document.workspace_id, user_id, backlinks))
-            self._delete_existing_chunks_for_reindex(
-                user_id=user_id,
-                workspace_id=document.workspace_id,
-                document_id=document.id,
-                wiki_page_ids=[page.id for page in wiki_models],
-                replace_workspace_projection=True,
-                purge_raw_chunks=True,
-            )
-            vectors = metrics.time("document.embedding_seconds", lambda: [self.embeddings.embed(chunk.content) for chunk in chunks])
-            metrics.time(
-                "document.qdrant_index_seconds",
-                lambda: retry_call(lambda: self.vector_search.upsert_chunks(chunks, vectors), attempts=3),
-            )
-            self._save_chunks(chunks)
             self._set_status(document, DocumentStatus.READY)
             metrics.increment("documents.processed")
             return {
                 "document": serialize_document(document),
                 "extracted": extracted_paths,
                 "wiki_pages": [serialize_wiki_page(page) for page in wiki_models],
-                "chunk_count": len(chunks),
+                "wiki_file_count": len(wiki_models) + 2,
             }
         except Exception as exc:
             metrics.increment("documents.processing_failures")
             document.status = DocumentStatus.FAILED.value
-            document.error_message = str(exc)
+            document.error_message = _soft_processing_error(exc)
             self.db.commit()
-            raise
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=document.error_message) from exc
 
     def source(self, user_id: str, document_id: str) -> dict:
         document = self._get_accessible_document(user_id, document_id)
@@ -204,48 +170,12 @@ class DocumentService:
             .filter(WikiPageModel.workspace_id == document.workspace_id)
             .all()
         )
-        chunks = self.db.query(ChunkModel).filter(ChunkModel.document_id == document.id).all()
         return {
             "document": serialize_document(document),
             "extracted": extracted_payload,
             "metadata": extracted_metadata,
             "wiki_pages": [serialize_wiki_page(page) for page in wiki_pages if document.id in (page.created_from_document_ids or [])],
-            "chunks": [serialize_chunk(chunk) for chunk in chunks],
         }
-
-    def rebuild_index(self, user_id: str, workspace_id: str) -> dict:
-        ensure_workspace_member(self.db, user_id, workspace_id)
-        self.vector_search.delete_workspace(user_id, workspace_id)
-        chunk_ids = [
-            row.id
-            for row in self.db.query(ChunkModel.id)
-            .filter(ChunkModel.user_id == user_id, ChunkModel.workspace_id == workspace_id)
-            .all()
-        ]
-        if chunk_ids:
-            self.db.query(CitationModel).filter(CitationModel.chunk_id.in_(chunk_ids)).update(
-                {CitationModel.chunk_id: None},
-                synchronize_session=False,
-            )
-        self.db.query(ChunkModel).filter(ChunkModel.user_id == user_id, ChunkModel.workspace_id == workspace_id).delete()
-        self.db.commit()
-
-        wiki_pages = self.db.query(WikiPageModel).filter(WikiPageModel.workspace_id == workspace_id).all()
-        chunks = []
-        document_filenames = self._workspace_document_filenames(workspace_id)
-        for wiki_page in wiki_pages:
-            chunks.extend(chunk_wiki_page(_wiki_model_to_entity(wiki_page), user_id, document_filenames=document_filenames))
-        index_content, backlinks = self._workspace_wiki_projection(workspace_id)
-        chunks.extend(chunk_wiki_index(workspace_id, user_id, index_content))
-        chunks.extend(chunk_wiki_backlinks(workspace_id, user_id, backlinks))
-        vectors = metrics.time("index_rebuild.embedding_seconds", lambda: [self.embeddings.embed(chunk.content) for chunk in chunks])
-        metrics.time(
-            "index_rebuild.qdrant_index_seconds",
-            lambda: retry_call(lambda: self.vector_search.upsert_chunks(chunks, vectors), attempts=3),
-        )
-        self._save_chunks(chunks)
-        metrics.increment("index_rebuilds")
-        return {"workspace_id": workspace_id, "chunk_count": len(chunks), "status": "rebuilt"}
 
     def _get_accessible_document(self, user_id: str, document_id: str) -> DocumentModel:
         document = self.db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
@@ -303,16 +233,8 @@ class DocumentService:
         required_pages = list(extracted.metadata.get("ocr_required_pages") or [])
         if not required_pages:
             return extracted
-        metadata = dict(extracted.metadata)
         if self.ocr is None:
-            metadata["ocr_status"] = "required_not_configured"
-            return ExtractedDocument(
-                document_id=extracted.document_id,
-                filename=extracted.filename,
-                file_type=extracted.file_type,
-                pages=extracted.pages,
-                metadata=metadata,
-            )
+            raise RuntimeError(DOCUMENT_PROCESSING_FAILED)
         try:
             result = metrics.time(
                 "document.ocr_seconds",
@@ -322,29 +244,11 @@ class DocumentService:
                 ),
             )
         except Exception as exc:
-            metadata.update(
-                {
-                    "ocr_status": "failed",
-                    "ocr_error": str(exc),
-                    "ocr_required_pages": required_pages,
-                }
-            )
-            return ExtractedDocument(
-                document_id=extracted.document_id,
-                filename=extracted.filename,
-                file_type=extracted.file_type,
-                pages=extracted.pages,
-                metadata=metadata,
-            )
+            raise RuntimeError(DOCUMENT_PROCESSING_FAILED) from exc
         if result is None:
-            metadata["ocr_status"] = "required_not_configured"
-            return ExtractedDocument(
-                document_id=extracted.document_id,
-                filename=extracted.filename,
-                file_type=extracted.file_type,
-                pages=extracted.pages,
-                metadata=metadata,
-            )
+            raise RuntimeError(DOCUMENT_PROCESSING_FAILED)
+        if result.metadata.get("ocr_status") in {"failed", "empty", "skipped_page_limit"} or not result.pages:
+            raise RuntimeError(DOCUMENT_PROCESSING_FAILED)
         return merge_ocr_result(extracted, result)
 
     def _save_wiki_bundle(self, document: DocumentModel, bundle) -> list[WikiPageModel]:
@@ -467,74 +371,6 @@ class DocumentService:
             )
         self.db.commit()
 
-    def _save_chunks(self, chunks) -> None:
-        for chunk in chunks:
-            self.db.add(
-                ChunkModel(
-                    id=chunk.id,
-                    workspace_id=chunk.workspace_id,
-                    user_id=chunk.user_id,
-                    document_id=chunk.document_id,
-                    wiki_page_id=chunk.wiki_page_id,
-                    source_type=chunk.source_type,
-                    title=chunk.title,
-                    heading=chunk.heading,
-                    path=chunk.path,
-                    content=chunk.content,
-                    page_number=chunk.page_number,
-                    qdrant_point_id=chunk.id,
-                    metadata_json=chunk.metadata,
-                )
-            )
-        self.db.commit()
-
-    def _delete_existing_chunks_for_reindex(
-        self,
-        user_id: str,
-        workspace_id: str,
-        document_id: str,
-        wiki_page_ids: list[str],
-        replace_workspace_projection: bool = False,
-        purge_raw_chunks: bool = False,
-    ) -> None:
-        filters = [
-            ChunkModel.user_id == user_id,
-            ChunkModel.workspace_id == workspace_id,
-        ]
-        reindex_filters = [ChunkModel.document_id == document_id]
-        if wiki_page_ids:
-            reindex_filters.append(ChunkModel.wiki_page_id.in_(wiki_page_ids))
-        if replace_workspace_projection:
-            reindex_filters.append(ChunkModel.source_type.in_(["wiki_index", "wiki_backlinks"]))
-        if purge_raw_chunks:
-            reindex_filters.append(ChunkModel.source_type == "raw")
-        rows = self.db.query(ChunkModel.id).filter(*filters).filter(or_(*reindex_filters)).all()
-        chunk_ids = [row.id for row in rows]
-        if not chunk_ids:
-            return
-        self.db.query(CitationModel).filter(CitationModel.chunk_id.in_(chunk_ids)).update(
-            {CitationModel.chunk_id: None},
-            synchronize_session=False,
-        )
-        self.db.query(ChunkModel).filter(ChunkModel.id.in_(chunk_ids)).delete(synchronize_session=False)
-        if hasattr(self.vector_search, "delete_chunks"):
-            self.vector_search.delete_chunks(chunk_ids)
-        self.db.commit()
-
-    def _workspace_wiki_projection(self, workspace_id: str) -> tuple[str, dict[str, list[str]]]:
-        wiki_root = PurePosixPath("wiki") / workspace_id
-        index_path = str(wiki_root / "INDEX.md")
-        backlinks_path = str(wiki_root / "_backlinks.json")
-        index_content = self.storage.read_text(index_path) if self.storage.exists(index_path) else ""
-        backlinks = json.loads(self.storage.read_text(backlinks_path)) if self.storage.exists(backlinks_path) else {}
-        return index_content, backlinks
-
-    def _workspace_document_filenames(self, workspace_id: str) -> dict[str, str]:
-        return {
-            row.id: row.filename
-            for row in self.db.query(DocumentModel.id, DocumentModel.filename).filter(DocumentModel.workspace_id == workspace_id).all()
-        }
-
 
 def _file_type(filename: str) -> str:
     suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -543,6 +379,13 @@ def _file_type(filename: str) -> str:
 
 def _safe_filename(filename: str) -> str:
     return "".join(character if character.isalnum() or character in {".", "-", "_"} else "_" for character in filename)
+
+
+def _soft_processing_error(exc: Exception) -> str:
+    message = str(exc)
+    if message in {DOCUMENT_PROCESSING_FAILED, DOCUMENT_PROCESSING_UNAVAILABLE}:
+        return message
+    return DOCUMENT_PROCESSING_FAILED
 
 
 def _wiki_model_to_entity(model: WikiPageModel):
@@ -685,20 +528,4 @@ def serialize_wiki_page(page: WikiPageModel) -> dict:
         "created_from_document_ids": page.created_from_document_ids or [],
         "created_at": page.created_at.isoformat(),
         "updated_at": page.updated_at.isoformat(),
-    }
-
-
-def serialize_chunk(chunk: ChunkModel) -> dict:
-    return {
-        "id": chunk.id,
-        "workspace_id": chunk.workspace_id,
-        "document_id": chunk.document_id,
-        "wiki_page_id": chunk.wiki_page_id,
-        "source_type": chunk.source_type,
-        "title": chunk.title,
-        "heading": chunk.heading,
-        "path": chunk.path,
-        "content": chunk.content,
-        "page_number": chunk.page_number,
-        "metadata": chunk.metadata_json or {},
     }

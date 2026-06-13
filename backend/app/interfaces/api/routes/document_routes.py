@@ -6,12 +6,10 @@ from app.application.documents.service import DocumentService
 from app.infrastructure.db.models import UserModel
 from app.infrastructure.db.session import get_db
 from app.interfaces.api.dependencies import (
-    embedding_dependency,
     get_current_user,
     ocr_dependency,
     parser_registry_dependency,
     storage_dependency,
-    vector_search_dependency,
     settings_dependency,
 )
 from app.infrastructure.settings import Settings
@@ -24,16 +22,12 @@ def document_service(
     storage=Depends(storage_dependency),
     parser_registry=Depends(parser_registry_dependency),
     ocr=Depends(ocr_dependency),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
     settings: Settings = Depends(settings_dependency),
 ) -> DocumentService:
     return DocumentService(
         db,
         storage,
         parser_registry,
-        embeddings,
-        vector_search,
         ocr=ocr,
         wiki_generator=OpenRouterWikiGeneratorAdapter(
             settings.openrouter_api_key,
@@ -106,11 +100,3 @@ def document_status(
 ) -> dict:
     return service.status(user.id, document_id)
 
-
-@router.post("/api/workspaces/{workspace_id}/index/rebuild")
-def rebuild_workspace_index(
-    workspace_id: str,
-    service: DocumentService = Depends(document_service),
-    user: UserModel = Depends(get_current_user),
-) -> dict:
-    return service.rebuild_index(user.id, workspace_id)

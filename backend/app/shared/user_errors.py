@@ -1,0 +1,5 @@
+AI_SERVICE_UNAVAILABLE = "AI service is currently unavailable. Please try again."
+DOCUMENT_PROCESSING_FAILED = "Document processing failed. Please try again."
+DOCUMENT_PROCESSING_UNAVAILABLE = "Document processing is currently unavailable. Please try again."
+SPEECH_RECOGNITION_UNAVAILABLE = "Speech recognition is currently unavailable. Please try again."
+VOICE_PLAYBACK_UNAVAILABLE = "Voice playback is currently unavailable. Please try again."

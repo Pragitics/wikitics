@@ -4,16 +4,13 @@ from threading import Thread
 from time import perf_counter
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.adapters.llm.local_llm_adapter import compact_title
 from app.application.qa.context import build_context_pack, citations_from_results, context_profile
+from app.application.wiki.search import WikiSearch
 from app.application.workspaces.access import ensure_workspace_member
 from app.domain.retrieval.entities import SearchResult
 from app.infrastructure.db.models import (
-    ChunkModel,
     CitationModel,
     ConversationModel,
     MessageModel,
@@ -25,6 +22,7 @@ from app.infrastructure.db.session import SessionLocal
 from app.shared.ids import new_id
 from app.shared.metrics import metrics
 from app.shared.retry import retry_call
+from app.shared.user_errors import AI_SERVICE_UNAVAILABLE
 
 
 SUMMARY_MESSAGE_THRESHOLD = 12
@@ -35,11 +33,11 @@ SUMMARY_MAX_CHARACTERS = 1600
 
 
 class QAService:
-    def __init__(self, db: Session, embeddings, vector_search, llm) -> None:
+    def __init__(self, db: Session, storage, llm) -> None:
         self.db = db
-        self.embeddings = embeddings
-        self.vector_search = vector_search
+        self.storage = storage
         self.llm = llm
+        self.wiki_search = WikiSearch(db, storage)
 
     def search(self, user_id: str, workspace_id: str, query: str, document_ids: list[str] | None = None) -> list[dict]:
         results = self._retrieve_results(user_id, workspace_id, query, document_ids=document_ids, max_results=10)
@@ -81,12 +79,15 @@ class QAService:
                 voice_style_preference=resolved_voice_style,
             ),
         )
-        answer = _timed(
-            trace,
-            "llm_response",
-            "qa.llm_response_seconds",
-            lambda: retry_call(lambda: self.llm.answer(question, context_pack), attempts=2),
-        )
+        try:
+            answer = _timed(
+                trace,
+                "llm_response",
+                "qa.llm_response_seconds",
+                lambda: retry_call(lambda: self.llm.answer(question, context_pack), attempts=2),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=AI_SERVICE_UNAVAILABLE) from exc
         if mode == "voice":
             answer = shape_voice_answer(answer, question)
         citations = citations_from_results(results)
@@ -108,7 +109,6 @@ class QAService:
                     message_id=assistant_message.id,
                     document_id=citation.document_id,
                     wiki_page_id=wiki_page_ids_by_chunk.get(citation.chunk_id),
-                    chunk_id=citation.chunk_id,
                     page_number=citation.page_number,
                     quote=citation.quote,
                 )
@@ -186,17 +186,24 @@ class QAService:
                     continue
                 chunks.append(delta)
                 yield {"type": "answer_delta", "delta": delta}
+        except Exception:
+            yield {"type": "error", "message": AI_SERVICE_UNAVAILABLE}
+            return
         finally:
             trace["llm_stream"] = perf_counter() - llm_started
             metrics.observe("qa.llm_stream_seconds", trace["llm_stream"])
         answer = "".join(chunks).strip()
         if not answer:
-            answer = _timed(
-                trace,
-                "llm_response",
-                "qa.llm_response_seconds",
-                lambda: retry_call(lambda: self.llm.answer(question, context_pack), attempts=2),
-            )
+            try:
+                answer = _timed(
+                    trace,
+                    "llm_response",
+                    "qa.llm_response_seconds",
+                    lambda: retry_call(lambda: self.llm.answer(question, context_pack), attempts=2),
+                )
+            except Exception:
+                yield {"type": "error", "message": AI_SERVICE_UNAVAILABLE}
+                return
             yield {"type": "answer_delta", "delta": answer}
         if mode == "voice":
             answer = shape_voice_answer(answer, question)
@@ -219,7 +226,6 @@ class QAService:
                     message_id=assistant_message.id,
                     document_id=citation.document_id,
                     wiki_page_id=wiki_page_ids_by_chunk.get(citation.chunk_id),
-                    chunk_id=citation.chunk_id,
                     page_number=citation.page_number,
                     quote=citation.quote,
                 )
@@ -325,139 +331,17 @@ class QAService:
     ) -> list[SearchResult]:
         ensure_workspace_member(self.db, user_id, workspace_id)
         normalized_query = normalize_question(query)
-        vector = _timed(trace, "embedding", "qa.embedding_seconds", lambda: self.embeddings.embed(normalized_query or query))
-        filters = {"user_id": user_id, "workspace_id": workspace_id}
-        vector_results = _timed(
+        return _timed(
             trace,
-            "vector_search",
-            "qa.vector_search_seconds",
-            lambda: self.vector_search.search(vector, filters=filters, limit=max_results),
+            "wiki_search",
+            "qa.wiki_search_seconds",
+            lambda: self.wiki_search.search(
+                workspace_id,
+                normalized_query or query,
+                document_ids=document_ids,
+                max_results=max_results,
+            ),
         )
-        vector_results = [result for result in vector_results if result.source_type.startswith("wiki")]
-        keyword_results = _timed(
-            trace,
-            "keyword_search",
-            "qa.keyword_search_seconds",
-            lambda: self._keyword_search(user_id, workspace_id, normalized_query),
-        )
-        merged = self._merge_results(vector_results + keyword_results)
-        backlinks = _timed(
-            trace,
-            "backlink_expansion",
-            "qa.backlink_expansion_seconds",
-            lambda: self._backlink_expansion(user_id, workspace_id, merged),
-        )
-        merged = self._merge_results(merged + backlinks)
-        if document_ids:
-            allowed = set(document_ids)
-            merged = [result for result in merged if _matches_document_filter(result, allowed)]
-        reranked = _timed(trace, "rerank", "qa.rerank_seconds", lambda: self._rerank(normalized_query, merged))
-        return reranked[:max_results]
-
-    def _keyword_search(self, user_id: str, workspace_id: str, query: str) -> list[SearchResult]:
-        terms = [term for term in query.split() if len(term) > 2][:5]
-        if not terms:
-            return []
-        filters = [ChunkModel.content.ilike(f"%{term}%") for term in terms]
-        rows = (
-            self.db.query(ChunkModel)
-            .filter(
-                ChunkModel.user_id == user_id,
-                ChunkModel.workspace_id == workspace_id,
-                ChunkModel.source_type.in_(["wiki", "wiki_index", "wiki_backlinks"]),
-                or_(*filters),
-            )
-            .limit(8)
-            .all()
-        )
-        return [
-            SearchResult(
-                chunk_id=row.id,
-                score=0.55,
-                source_type=row.source_type,
-                content=row.content,
-                payload={
-                    **(row.metadata_json or {}),
-                    "user_id": row.user_id,
-                    "workspace_id": row.workspace_id,
-                    "document_id": row.document_id,
-                    "wiki_page_id": row.wiki_page_id,
-                    "source_type": row.source_type,
-                    "title": row.title,
-                    "heading": row.heading,
-                    "path": row.path,
-                    "page_number": row.page_number,
-                    "content_preview": row.content[:300],
-                },
-            )
-            for row in rows
-        ]
-
-    def _backlink_expansion(self, user_id: str, workspace_id: str, results: list[SearchResult]) -> list[SearchResult]:
-        document_ids = {
-            document_id
-            for result in results
-            for document_id in _linked_document_ids(result)
-            if document_id
-        }
-        if not document_ids:
-            return []
-        rows = (
-            self.db.query(ChunkModel)
-            .filter(
-                ChunkModel.user_id == user_id,
-                ChunkModel.workspace_id == workspace_id,
-                ChunkModel.source_type.in_(["wiki", "wiki_index", "wiki_backlinks"]),
-            )
-            .limit(200)
-            .all()
-        )
-        expanded = []
-        for row in rows:
-            linked = set((row.metadata_json or {}).get("linked_raw_documents") or [])
-            if row.document_id in document_ids or linked.intersection(document_ids):
-                expanded.append(
-                    SearchResult(
-                        chunk_id=row.id,
-                        score=0.5,
-                        source_type=row.source_type,
-                        content=row.content,
-                        payload={
-                            **(row.metadata_json or {}),
-                            "user_id": row.user_id,
-                            "workspace_id": row.workspace_id,
-                            "document_id": row.document_id,
-                            "wiki_page_id": row.wiki_page_id,
-                            "source_type": row.source_type,
-                            "title": row.title,
-                            "heading": row.heading,
-                            "path": row.path,
-                            "page_number": row.page_number,
-                            "content_preview": row.content[:300],
-                        },
-                    )
-                )
-        return expanded
-
-    def _merge_results(self, results: list[SearchResult]) -> list[SearchResult]:
-        merged = {}
-        for result in results:
-            existing = merged.get(result.chunk_id)
-            if existing is None or result.score > existing.score:
-                merged[result.chunk_id] = result
-        return sorted(merged.values(), key=lambda result: result.score, reverse=True)
-
-    def _rerank(self, query: str, results: list[SearchResult]) -> list[SearchResult]:
-        query_terms = set(query.split())
-
-        def rank(result: SearchResult) -> float:
-            text = normalize_question(" ".join([result.content, str(result.payload.get("title") or ""), str(result.payload.get("heading") or "")]))
-            result_terms = set(text.split())
-            overlap = len(query_terms.intersection(result_terms))
-            source_boost = 0.2 if result.source_type == "wiki" else 0.08 if result.source_type.startswith("wiki_") else 0
-            return result.score + (overlap * 0.04) + source_boost
-
-        return sorted(results, key=rank, reverse=True)
 
     def _conversation(self, user_id: str, workspace_id: str, conversation_id: str | None, mode: str) -> ConversationModel:
         if conversation_id:
@@ -507,15 +391,14 @@ class QAService:
         )
         if message is None:
             return "New chat"
-        return compact_title(message.content)
+        return "New chat"
 
     def _schedule_conversation_title(self, conversation_id: str) -> None:
         if not hasattr(self.llm, "title"):
             return
-        if getattr(self.llm, "api_key", ""):
-            Thread(target=self._generate_conversation_title, args=(conversation_id,), daemon=True).start()
+        if not getattr(self.llm, "api_key", ""):
             return
-        self._generate_conversation_title(conversation_id)
+        Thread(target=self._generate_conversation_title, args=(conversation_id,), daemon=True).start()
 
     def _generate_conversation_title(self, conversation_id: str) -> None:
         try:
@@ -537,11 +420,13 @@ class QAService:
                     return
                 conversation.title = title[:120]
                 db.commit()
-        except SQLAlchemyError:
+        except Exception:
             return
 
     def _schedule_conversation_summary(self, conversation_id: str) -> None:
         if not hasattr(self.llm, "summarize_conversation"):
+            return
+        if not getattr(self.llm, "api_key", ""):
             return
         Thread(target=self._summarize_conversation, args=(conversation_id,), daemon=True).start()
 
@@ -572,7 +457,7 @@ class QAService:
                 conversation.memory_updated_at = utcnow()
                 conversation.memory_message_cursor = messages[-1].id
                 db.commit()
-        except SQLAlchemyError:
+        except Exception:
             return
 
     def _conversation_message_count(self, conversation_id: str) -> int:

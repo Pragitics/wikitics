@@ -184,7 +184,7 @@ def pages_from_document_intelligence_payload(payload: Any) -> list[ExtractedPage
         text = "\n\n".join(_find_text_payloads(payload))
         return [ExtractedPage(page_number=1, text=text, headings=[])] if text.strip() else []
     pages = []
-    for fallback_number, page_payload in enumerate(page_payloads, start=1):
+    for inferred_page_number, page_payload in enumerate(page_payloads, start=1):
         if not isinstance(page_payload, dict):
             continue
         page_number = int(
@@ -192,7 +192,7 @@ def pages_from_document_intelligence_payload(payload: Any) -> list[ExtractedPage
             or page_payload.get("page")
             or page_payload.get("page_no")
             or page_payload.get("index")
-            or fallback_number
+            or inferred_page_number
         )
         text = page_text(page_payload)
         tables = page_payload.get("tables") if isinstance(page_payload.get("tables"), list) else []

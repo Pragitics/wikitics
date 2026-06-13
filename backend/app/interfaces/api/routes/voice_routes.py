@@ -16,18 +16,18 @@ from app.infrastructure.settings import Settings
 from app.infrastructure.db.models import UserModel
 from app.infrastructure.db.session import SessionLocal, get_db
 from app.interfaces.api.dependencies import (
-    embedding_dependency,
     get_current_user,
     livekit_dependency,
     llm_dependency,
     settings_dependency,
+    storage_dependency,
     stt_dependency,
     stt_stream_dependency,
     tts_dependency,
-    vector_search_dependency,
 )
 from app.shared.metrics import metrics
 from app.shared.security import decode_access_token
+from app.shared.user_errors import AI_SERVICE_UNAVAILABLE, SPEECH_RECOGNITION_UNAVAILABLE, VOICE_PLAYBACK_UNAVAILABLE
 
 router = APIRouter(tags=["voice"])
 
@@ -47,11 +47,10 @@ def voice_service(db: Session = Depends(get_db), livekit_adapter=Depends(livekit
 
 def qa_service(
     db: Session = Depends(get_db),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
+    storage=Depends(storage_dependency),
     llm=Depends(llm_dependency),
 ) -> QAService:
-    return QAService(db, embeddings, vector_search, llm)
+    return QAService(db, storage, llm)
 
 
 @router.post("/api/workspaces/{workspace_id}/voice/session")
@@ -106,7 +105,10 @@ def ask_with_voice_transcript(
         audio = _time_stage(trace, "tts", lambda: tts.synthesize(answer["answer"]))
         return answer, audio
 
-    answer, audio = metrics.time("voice.end_to_end_seconds", voice_flow)
+    try:
+        answer, audio = metrics.time("voice.end_to_end_seconds", voice_flow)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=soft_voice_error(exc)) from exc
     return {"transcript": payload.transcript, **voice_audio_payload(answer, audio, trace, tts)}
 
 
@@ -143,7 +145,10 @@ async def ask_with_voice_audio(
         raise HTTPException(status_code=400, detail="No speech detected")
 
     trace: dict[str, float] = {}
-    transcript = _time_stage(trace, "stt", lambda: stt.transcribe(audio, file.content_type or "audio/webm")).strip()
+    try:
+        transcript = _time_stage(trace, "stt", lambda: stt.transcribe(audio, file.content_type or "audio/webm")).strip()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=soft_voice_error(exc)) from exc
     if not transcript:
         raise HTTPException(status_code=400, detail="No speech detected")
 
@@ -158,7 +163,10 @@ async def ask_with_voice_audio(
         response_audio = _time_stage(trace, "tts", lambda: tts.synthesize(answer["answer"]))
         return answer, response_audio
 
-    answer, response_audio = metrics.time("voice.end_to_end_seconds", voice_flow)
+    try:
+        answer, response_audio = metrics.time("voice.end_to_end_seconds", voice_flow)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=soft_voice_error(exc)) from exc
     return {"transcript": transcript, **voice_audio_payload(answer, response_audio, trace, tts)}
 
 
@@ -179,7 +187,11 @@ async def stream_with_voice_audio(
 
     def events():
         trace: dict[str, float] = {}
-        transcript = _time_stage(trace, "stt", lambda: stt.transcribe(audio, file.content_type or "audio/webm")).strip()
+        try:
+            transcript = _time_stage(trace, "stt", lambda: stt.transcribe(audio, file.content_type or "audio/webm")).strip()
+        except RuntimeError as exc:
+            yield sse_event("error", {"type": "error", "message": soft_voice_error(exc)})
+            return
         if not transcript:
             yield sse_event("error", {"type": "error", "message": "No speech detected"})
             return
@@ -232,40 +244,46 @@ def voice_answer_stream_events(
     spoken_segments: list[str] = []
     pending_text = ""
     final_answer: dict | None = None
+    stream_failed = False
     qa_events: Queue = Queue()
     user_id = user.id
     workspace_id = session.workspace_id
     conversation_id = session.conversation_id
 
     def emit_tts_segment(segment: str):
-        nonlocal audio_started, audio_bytes, first_audio_at
+        nonlocal audio_started, audio_bytes, first_audio_at, stream_failed
         if not segment:
             return
         if not audio_started:
             audio_started = True
             yield sse_event("audio_start", {"type": "audio_start", "audio_mime": audio_mime})
         tts_started = perf_counter()
-        for chunk in tts.stream_synthesize(segment):
-            now = perf_counter()
-            if first_audio_at is None:
-                first_audio_at = now
-                trace["tts_first_byte"] = now - tts_started
-            audio_bytes += len(chunk)
-            yield sse_event(
-                "audio_delta",
-                {
-                    "type": "audio_delta",
-                    "audio_base64": base64.b64encode(chunk).decode("ascii"),
-                    "audio_bytes": len(chunk),
-                },
-            )
+        try:
+            for chunk in tts.stream_synthesize(segment):
+                now = perf_counter()
+                if first_audio_at is None:
+                    first_audio_at = now
+                    trace["tts_first_byte"] = now - tts_started
+                audio_bytes += len(chunk)
+                yield sse_event(
+                    "audio_delta",
+                    {
+                        "type": "audio_delta",
+                        "audio_base64": base64.b64encode(chunk).decode("ascii"),
+                        "audio_bytes": len(chunk),
+                    },
+                )
+        except RuntimeError as exc:
+            stream_failed = True
+            yield sse_event("error", {"type": "error", "message": soft_voice_error(exc)})
+            return
         trace["tts_stream"] = trace.get("tts_stream", 0) + perf_counter() - tts_started
         trace["tts_transport"] = getattr(tts, "last_stream_transport", "unknown")
 
     def produce_qa_events() -> None:
         db = SessionLocal()
         try:
-            threaded_qa = QAService(db, qa.embeddings, qa.vector_search, qa.llm)
+            threaded_qa = QAService(db, qa.storage, qa.llm)
             for qa_event in threaded_qa.stream_ask_events(
                 user_id=user_id,
                 workspace_id=workspace_id,
@@ -276,7 +294,7 @@ def voice_answer_stream_events(
             ):
                 qa_events.put(("event", qa_event))
         except Exception as exc:
-            qa_events.put(("error", str(exc)))
+            qa_events.put(("error", soft_voice_error(exc)))
         finally:
             db.close()
             qa_events.put(("done", None))
@@ -288,9 +306,12 @@ def voice_answer_stream_events(
         if message_type == "done":
             break
         if message_type == "error":
-            yield sse_event("error", {"type": "error", "message": "Voice failed", "detail": event})
+            yield sse_event("error", {"type": "error", "message": event})
             return
         event_type = event.get("type")
+        if event_type == "error":
+            yield sse_event("error", {"type": "error", "message": event.get("message") or AI_SERVICE_UNAVAILABLE})
+            return
         if event_type == "context_ready":
             yield sse_event("context_ready", event)
             continue
@@ -302,19 +323,23 @@ def voice_answer_stream_events(
                     break
                 spoken_segments.append(segment)
                 yield from emit_tts_segment(segment)
+                if stream_failed:
+                    return
             continue
         if event_type == "final":
             final_answer = event
             break
 
     if final_answer is None:
-        yield sse_event("error", {"type": "error", "message": "Voice failed"})
+        yield sse_event("error", {"type": "error", "message": AI_SERVICE_UNAVAILABLE})
         return
 
     remaining_segment = remaining_voice_segment(str(final_answer.get("answer") or ""), spoken_segments)
     if remaining_segment:
         spoken_segments.append(remaining_segment)
         yield from emit_tts_segment(remaining_segment)
+        if stream_failed:
+            return
     if first_audio_at is not None:
         trace["first_audio_from_voice_start"] = first_audio_at - voice_started
     trace["tts_transport"] = getattr(tts, "last_stream_transport", trace.get("tts_transport", "unknown"))
@@ -409,6 +434,12 @@ def _time_stage(trace: dict[str, float], key: str, func):
         return func()
     finally:
         trace[key] = perf_counter() - start
+
+
+def soft_voice_error(exc: Exception) -> str:
+    message = str(exc)
+    allowed = {AI_SERVICE_UNAVAILABLE, SPEECH_RECOGNITION_UNAVAILABLE, VOICE_PLAYBACK_UNAVAILABLE}
+    return message if message in allowed else AI_SERVICE_UNAVAILABLE
 
 
 def numeric_total(values: dict) -> float:

@@ -8,7 +8,7 @@ sys.path.insert(0, str(AGENT_WORKER_PATH))
 from agents.wikitics_voice_agent import WikiticsVoiceAgent  # noqa: E402
 
 
-class FakeRAGClient:
+class FakeQAClient:
     def ask(self, token: str, workspace_id: str, question: str, conversation_id: str | None = None) -> dict:
         return {"answer": f"Answer for {question}", "conversation_id": conversation_id or "conv-1"}
 
@@ -18,8 +18,8 @@ class FakeTTS:
         return text.encode("utf-8")
 
 
-def test_agent_worker_handles_transcript_with_rag_and_tts():
-    agent = WikiticsVoiceAgent(FakeRAGClient(), FakeTTS())
+def test_agent_worker_handles_transcript_with_qa_and_tts():
+    agent = WikiticsVoiceAgent(FakeQAClient(), FakeTTS())
 
     result = agent.handle_transcript("token", "workspace-1", "What is due?")
 

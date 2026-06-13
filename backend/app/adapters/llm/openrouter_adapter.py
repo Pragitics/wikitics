@@ -2,8 +2,8 @@ import json
 import httpx
 from collections.abc import Iterator
 
-from app.adapters.llm.local_llm_adapter import LocalLLMAdapter, compact_title
 from app.shared.retry import RetryError, retry_call
+from app.shared.user_errors import AI_SERVICE_UNAVAILABLE
 
 
 class OpenRouterLLMAdapter:
@@ -20,12 +20,12 @@ class OpenRouterLLMAdapter:
         self.model = model
         self.title_model = title_model or model
         self.summary_model = summary_model or self.title_model
-        self.fallback = LocalLLMAdapter()
 
     def answer(self, question: str, context_pack: str) -> str:
         if not self.api_key:
-            return self.fallback.answer(question, context_pack)
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE)
         payload = self._payload(question, context_pack)
+
         def call_provider() -> httpx.Response:
             with httpx.Client(timeout=30) as client:
                 response = client.post(
@@ -40,13 +40,12 @@ class OpenRouterLLMAdapter:
             response = retry_call(call_provider, attempts=3, retry_exceptions=(httpx.HTTPError,))
             data = response.json()
             return data["choices"][0]["message"]["content"]
-        except (KeyError, RetryError, ValueError, httpx.HTTPError):
-            return self.fallback.answer(question, context_pack)
+        except (KeyError, RetryError, ValueError, httpx.HTTPError) as exc:
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE) from exc
 
     def stream_answer(self, question: str, context_pack: str) -> Iterator[str]:
         if not self.api_key:
-            yield self.fallback.answer(question, context_pack)
-            return
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE)
         payload = {**self._payload(question, context_pack), "stream": True}
         try:
             with httpx.Client(timeout=30) as client:
@@ -72,13 +71,12 @@ class OpenRouterLLMAdapter:
                         delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content") or ""
                         if delta:
                             yield delta
-        except httpx.HTTPError:
-            yield self.fallback.answer(question, context_pack)
+        except httpx.HTTPError as exc:
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE) from exc
 
     def title(self, messages: list[dict]) -> str:
-        fallback = self.fallback.title(messages)
         if not self.api_key:
-            return fallback
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE)
         payload = {
             "model": self.title_model,
             "messages": [
@@ -118,14 +116,13 @@ class OpenRouterLLMAdapter:
         try:
             response = retry_call(call_provider, attempts=2, retry_exceptions=(httpx.HTTPError,))
             data = response.json()
-            return compact_title(data["choices"][0]["message"]["content"]) or fallback
-        except (KeyError, RetryError, ValueError, httpx.HTTPError):
-            return fallback
+            return _clean_title(data["choices"][0]["message"]["content"])
+        except (KeyError, RetryError, ValueError, httpx.HTTPError) as exc:
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE) from exc
 
     def summarize_conversation(self, existing_summary: str, messages: list[dict]) -> str:
-        fallback = self.fallback.summarize_conversation(existing_summary, messages)
         if not self.api_key:
-            return fallback
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE)
         payload = {
             "model": self.summary_model,
             "messages": [
@@ -169,9 +166,11 @@ class OpenRouterLLMAdapter:
             response = retry_call(call_provider, attempts=2, retry_exceptions=(httpx.HTTPError,))
             data = response.json()
             summary = " ".join(str(data["choices"][0]["message"]["content"]).split())
-            return summary[:1600] or fallback
-        except (KeyError, RetryError, ValueError, httpx.HTTPError):
-            return fallback
+            if not summary:
+                raise RuntimeError(AI_SERVICE_UNAVAILABLE)
+            return summary[:1600]
+        except (KeyError, RetryError, ValueError, httpx.HTTPError) as exc:
+            raise RuntimeError(AI_SERVICE_UNAVAILABLE) from exc
 
     def _payload(self, question: str, context_pack: str) -> dict:
         return {
@@ -196,3 +195,8 @@ class OpenRouterLLMAdapter:
             "temperature": 0.35,
             "max_tokens": 700,
         }
+
+
+def _clean_title(value: str) -> str:
+    cleaned = " ".join(str(value or "").replace('"', " ").replace("'", " ").split())
+    return cleaned.strip(" ,;:-.")[:120]

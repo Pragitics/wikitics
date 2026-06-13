@@ -10,6 +10,7 @@ from websockets.sync.client import ClientConnection, connect as websocket_connec
 
 from app.shared.metrics import metrics
 from app.shared.retry import RetryError, retry_call
+from app.shared.user_errors import VOICE_PLAYBACK_UNAVAILABLE
 
 
 class SarvamTTSAdapter:
@@ -51,7 +52,7 @@ class SarvamTTSAdapter:
     def synthesize(self, text: str) -> bytes:
         def operation() -> bytes:
             if not self.api_key:
-                return b""
+                raise RuntimeError(VOICE_PLAYBACK_UNAVAILABLE)
 
             def call_provider() -> httpx.Response:
                 with httpx.Client(timeout=30) as client:
@@ -66,15 +67,15 @@ class SarvamTTSAdapter:
             try:
                 response = retry_call(call_provider, attempts=3, retry_exceptions=(httpx.HTTPError,))
                 return decode_audio_response(response)
-            except (RetryError, ValueError, KeyError, httpx.HTTPError):
-                return b""
+            except (RetryError, ValueError, KeyError, httpx.HTTPError) as exc:
+                raise RuntimeError(VOICE_PLAYBACK_UNAVAILABLE) from exc
 
         return metrics.time("voice.tts_seconds", operation)
 
     def stream_synthesize(self, text: str) -> Iterator[bytes]:
         if not self.api_key:
             self.last_stream_transport = "disabled"
-            return
+            raise RuntimeError(VOICE_PLAYBACK_UNAVAILABLE)
         if self.websocket_enabled and self.websocket_url:
             yielded = False
             try:
@@ -100,9 +101,9 @@ class SarvamTTSAdapter:
                         if chunk:
                             self.last_stream_transport = "http_stream"
                             yield chunk
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             self.last_stream_transport = "http_stream_failed"
-            return
+            raise RuntimeError(VOICE_PLAYBACK_UNAVAILABLE) from exc
 
     def close_websocket(self) -> None:
         with self._websocket_lock:

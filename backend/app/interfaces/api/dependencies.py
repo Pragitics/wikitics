@@ -7,9 +7,6 @@ from app.adapters.llm.openrouter_adapter import OpenRouterLLMAdapter
 from app.adapters.ocr.sarvam_document_intelligence_adapter import SarvamDocumentIntelligenceOCRAdapter
 from app.adapters.parsers.registry import ParserRegistry
 from app.adapters.storage.local_storage_adapter import LocalDocumentStorageAdapter
-from app.adapters.vector.local_embedding_adapter import LocalEmbeddingAdapter
-from app.adapters.vector.local_vector_search_adapter import LocalVectorSearchAdapter
-from app.adapters.vector.qdrant_adapter import QdrantVectorSearchAdapter
 from app.adapters.voice.livekit_adapter import LiveKitVoiceAdapter
 from app.adapters.speech.sarvam_stt_adapter import SarvamSTTAdapter
 from app.adapters.speech.sarvam_streaming_stt_adapter import SarvamStreamingSTTBridge
@@ -59,23 +56,6 @@ def ocr_dependency(settings: Settings = Depends(settings_dependency)):
         timeout_seconds=settings.sarvam_document_intelligence_timeout_seconds,
         max_pages=settings.sarvam_document_intelligence_max_pages,
     )
-
-
-def embedding_dependency(settings: Settings = Depends(settings_dependency)):
-    return LocalEmbeddingAdapter(settings.embedding_dimension)
-
-
-def vector_search_dependency(request: Request, settings: Settings = Depends(settings_dependency)):
-    if not hasattr(request.app.state, "vector_search"):
-        if settings.vector_backend == "qdrant":
-            request.app.state.vector_search = QdrantVectorSearchAdapter(
-                settings.qdrant_url,
-                settings.qdrant_collection,
-                settings.embedding_dimension,
-            )
-        else:
-            request.app.state.vector_search = LocalVectorSearchAdapter()
-    return request.app.state.vector_search
 
 
 def llm_dependency(settings: Settings = Depends(settings_dependency)):

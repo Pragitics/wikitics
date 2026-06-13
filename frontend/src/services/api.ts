@@ -5,7 +5,6 @@ import type {
   DocumentRecord,
   HealthDetails,
   MetricsSnapshot,
-  RebuildResponse,
   SourceResponse,
   User,
   VoiceAskResponse,
@@ -19,6 +18,7 @@ import type {
 } from "../types/api";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const VOICE_UNAVAILABLE_MESSAGE = "Voice service is currently unavailable. Please try again.";
 
 type RequestOptions = RequestInit & { token?: string | null };
 
@@ -94,14 +94,12 @@ export const api = {
     return request<DocumentRecord>(`/api/workspaces/${workspaceId}/documents`, { token, method: "POST", body: form });
   },
   processDocument: (token: string, documentId: string) =>
-    request<{ document: DocumentRecord; chunk_count: number }>(`/api/documents/${documentId}/process`, {
+    request<{ document: DocumentRecord; wiki_file_count: number }>(`/api/documents/${documentId}/process`, {
       token,
       method: "POST"
     }),
   documentSource: (token: string, documentId: string) =>
     request<SourceResponse>(`/api/documents/${documentId}/source`, { token }),
-  rebuildIndex: (token: string, workspaceId: string) =>
-    request<RebuildResponse>(`/api/workspaces/${workspaceId}/index/rebuild`, { token, method: "POST" }),
   wikiPages: (token: string, workspaceId: string) =>
     request<WikiPage[]>(`/api/workspaces/${workspaceId}/wiki`, { token }),
   wikiAbsorbLogs: (token: string, workspaceId: string) =>
@@ -132,16 +130,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ revision_id: revisionId, edit_note: editNote })
     }),
-  reindexWikiPage: (token: string, workspaceId: string, pageId: string) =>
-    request<{ workspace_id: string; page_id: string; chunk_count: number; status: string }>(
-      `/api/workspaces/${workspaceId}/wiki/pages/${pageId}/reindex`,
-      { token, method: "POST" }
-    ),
-  reindexWiki: (token: string, workspaceId: string, pageIds?: string[]) =>
-    request<{ workspace_id: string; page_ids: string[]; chunk_count: number; index_chunk_count: number; status: string }>(
-      `/api/workspaces/${workspaceId}/wiki/reindex`,
-      { token, method: "POST", body: JSON.stringify({ page_ids: pageIds, include_index: true }) }
-    ),
   ask: (token: string, workspaceId: string, question: string, conversationId?: string | null) =>
     request<AskResponse>(`/api/workspaces/${workspaceId}/ask`, {
       token,
@@ -226,7 +214,7 @@ async function readVoiceStreamResponse(
 ): Promise<VoiceAskResponse> {
     if (!response.ok || !response.body) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.error?.message || (typeof error.detail === "string" ? error.detail : "Voice failed"));
+      throw new Error(error.error?.message || (typeof error.detail === "string" ? error.detail : VOICE_UNAVAILABLE_MESSAGE));
     }
     let finalEvent: VoiceAskResponse | null = null;
     await parseServerSentEvents(response.body, (event) => {
@@ -239,7 +227,7 @@ async function readVoiceStreamResponse(
       }
     });
     if (!finalEvent) {
-      throw new Error("Voice failed");
+      throw new Error(VOICE_UNAVAILABLE_MESSAGE);
     }
     return finalEvent;
 }

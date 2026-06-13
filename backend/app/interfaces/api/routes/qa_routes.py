@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.application.qa.service import QAService
 from app.infrastructure.db.models import UserModel
 from app.infrastructure.db.session import get_db
-from app.interfaces.api.dependencies import embedding_dependency, get_current_user, llm_dependency, vector_search_dependency
+from app.interfaces.api.dependencies import get_current_user, llm_dependency, storage_dependency
 
 router = APIRouter(tags=["qa"])
 
@@ -28,11 +28,10 @@ class SearchRequest(BaseModel):
 
 def qa_service(
     db: Session = Depends(get_db),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
+    storage=Depends(storage_dependency),
     llm=Depends(llm_dependency),
 ) -> QAService:
-    return QAService(db, embeddings, vector_search, llm)
+    return QAService(db, storage, llm)
 
 
 @router.post("/api/workspaces/{workspace_id}/ask")

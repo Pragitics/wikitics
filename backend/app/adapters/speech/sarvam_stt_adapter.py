@@ -2,6 +2,7 @@ import httpx
 
 from app.shared.metrics import metrics
 from app.shared.retry import RetryError, retry_call
+from app.shared.user_errors import SPEECH_RECOGNITION_UNAVAILABLE
 
 
 class SarvamSTTAdapter:
@@ -22,7 +23,7 @@ class SarvamSTTAdapter:
     def transcribe(self, audio: bytes, content_type: str = "audio/wav") -> str:
         def operation() -> str:
             if not self.api_key:
-                return ""
+                raise RuntimeError(SPEECH_RECOGNITION_UNAVAILABLE)
             normalized_content_type = normalize_content_type(content_type)
             files = {
                 "file": (
@@ -51,8 +52,8 @@ class SarvamSTTAdapter:
                 response = retry_call(call_provider, attempts=3, retry_exceptions=(httpx.HTTPError,))
                 data = response.json()
                 return data.get("transcript") or data.get("text") or ""
-            except (RetryError, ValueError, httpx.HTTPError):
-                return ""
+            except (RetryError, ValueError, httpx.HTTPError) as exc:
+                raise RuntimeError(SPEECH_RECOGNITION_UNAVAILABLE) from exc
 
         return metrics.time("voice.stt_seconds", operation)
 

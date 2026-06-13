@@ -2,7 +2,6 @@ from pathlib import Path
 from socket import create_connection
 from urllib.parse import urlparse
 
-import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -25,7 +24,6 @@ def detailed_health(db: Session = Depends(get_db), settings: Settings = Depends(
     checks = {
         "database": _check_database(db),
         "redis": _check_tcp_url(settings.redis_url),
-        "qdrant": _check_http(f"{settings.qdrant_url.rstrip('/')}/collections"),
         "storage": _check_storage(settings.local_storage_root),
     }
     status = "ok" if all(check["ok"] for check in checks.values()) else "degraded"
@@ -52,16 +50,6 @@ def _check_tcp_url(url: str) -> dict:
         port = parsed.port or 6379
         with create_connection((host, port), timeout=0.5):
             return {"ok": True}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-def _check_http(url: str) -> dict:
-    try:
-        with httpx.Client(timeout=1) as client:
-            response = client.get(url)
-            response.raise_for_status()
-        return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

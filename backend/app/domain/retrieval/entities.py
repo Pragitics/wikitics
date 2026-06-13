@@ -1,20 +1,4 @@
-from dataclasses import dataclass, field
-
-
-@dataclass(frozen=True)
-class Chunk:
-    id: str
-    workspace_id: str
-    user_id: str
-    source_type: str
-    content: str
-    document_id: str | None = None
-    wiki_page_id: str | None = None
-    title: str | None = None
-    heading: str | None = None
-    path: str | None = None
-    page_number: int | None = None
-    metadata: dict = field(default_factory=dict)
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

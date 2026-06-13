@@ -75,7 +75,7 @@ def test_document_upload_process_ask_and_voice_session(client, auth_headers, wor
     processed = client.post(f"/api/documents/{document_id}/process", headers=auth_headers)
     assert processed.status_code == 200
     assert processed.json()["document"]["status"] == "ready"
-    assert processed.json()["chunk_count"] >= 2
+    assert processed.json()["wiki_file_count"] >= 3
 
     source = client.get(f"/api/documents/{document_id}/source", headers=auth_headers)
     assert source.status_code == 200
@@ -113,10 +113,6 @@ def test_document_upload_process_ask_and_voice_session(client, auth_headers, wor
     conversations = client.get(f"/api/workspaces/{workspace_id}/conversations", headers=auth_headers)
     assert conversations.status_code == 200
     assert conversations.json()
-
-    rebuilt = client.post(f"/api/workspaces/{workspace_id}/index/rebuild", headers=auth_headers)
-    assert rebuilt.status_code == 200
-    assert rebuilt.json()["chunk_count"] >= 2
 
     voice = client.post(f"/api/workspaces/{workspace_id}/voice/session", headers=auth_headers, json={})
     assert voice.status_code == 200
@@ -174,6 +170,7 @@ def test_document_upload_process_ask_and_voice_session(client, auth_headers, wor
 
     app.dependency_overrides[tts_dependency] = lambda: FakeTTS()
     app.dependency_overrides[stt_dependency] = lambda: FakeSTT()
+    app.dependency_overrides[llm_dependency] = lambda: FakeFastLLM()
     try:
         voice_audio_answer = client.post(
             f"/api/voice/session/{voice.json()['session_id']}/audio",
@@ -181,6 +178,7 @@ def test_document_upload_process_ask_and_voice_session(client, auth_headers, wor
             files={"file": ("voice.webm", BytesIO(b"audio"), "audio/webm")},
         )
     finally:
+        app.dependency_overrides.pop(llm_dependency, None)
         app.dependency_overrides.pop(stt_dependency, None)
         app.dependency_overrides.pop(tts_dependency, None)
     assert voice_audio_answer.status_code == 200
@@ -191,6 +189,7 @@ def test_document_upload_process_ask_and_voice_session(client, auth_headers, wor
 
     app.dependency_overrides[tts_dependency] = lambda: FakeTTS()
     app.dependency_overrides[stt_dependency] = lambda: FakeSTT()
+    app.dependency_overrides[llm_dependency] = lambda: FakeFastLLM()
     try:
         streamed_voice = client.post(
             f"/api/voice/session/{voice.json()['session_id']}/audio/stream",
@@ -198,6 +197,7 @@ def test_document_upload_process_ask_and_voice_session(client, auth_headers, wor
             files={"file": ("voice.webm", BytesIO(b"audio"), "audio/webm")},
         )
     finally:
+        app.dependency_overrides.pop(llm_dependency, None)
         app.dependency_overrides.pop(stt_dependency, None)
         app.dependency_overrides.pop(tts_dependency, None)
     assert streamed_voice.status_code == 200
@@ -432,14 +432,14 @@ def test_later_documents_absorb_into_workspace_wiki_and_logs(client, auth_header
         json={"query": "dashboard checks server support"},
     )
     assert search.status_code == 200
-    indexed_support_chunks = [
+    indexed_support_pages = [
         row
         for row in search.json()
         if row["source_type"] == "wiki" and row["payload"].get("wiki_page_id") == support_pages[0]["id"]
     ]
-    assert indexed_support_chunks
-    assert any(second in (row["payload"].get("linked_raw_documents") or []) for row in indexed_support_chunks)
-    assert any("dashboard checks" in row["content"] for row in indexed_support_chunks)
+    assert indexed_support_pages
+    assert any(second in (row["payload"].get("linked_raw_documents") or []) for row in indexed_support_pages)
+    assert any("dashboard checks" in row["content"] for row in indexed_support_pages)
 
     index = client.get(f"/api/workspaces/{workspace_id}/wiki/index", headers=auth_headers)
     assert index.status_code == 200
@@ -595,7 +595,7 @@ def test_wiki_generation_can_create_multiple_pages(client, auth_headers, workspa
     assert logs.json()[0]["action_counts"]["create_page"] == 2
 
 
-def test_wiki_page_edit_revision_reindex_and_revert(client, auth_headers, workspace_id):
+def test_wiki_page_edit_revision_and_revert(client, auth_headers, workspace_id):
     _upload_and_process(
         client,
         auth_headers,
@@ -640,15 +640,8 @@ def test_wiki_page_edit_revision_reindex_and_revert(client, auth_headers, worksp
     assert reverted.status_code == 200
     assert "not specified" in reverted.json()["content"]
 
-    reindexed = client.post(
-        f"/api/workspaces/{workspace_id}/wiki/pages/{page['id']}/reindex",
-        headers=auth_headers,
-    )
-    assert reindexed.status_code == 200
-    assert reindexed.json()["chunk_count"] > 0
 
-
-def test_wiki_page_create_read_list_delete_and_projection_reindex(client, auth_headers, workspace_id):
+def test_wiki_page_create_read_list_delete_and_projection(client, auth_headers, workspace_id):
     document_id = _upload_and_process(
         client,
         auth_headers,
@@ -709,7 +702,7 @@ def test_wiki_page_create_read_list_delete_and_projection_reindex(client, auth_h
     assert "Escalation Matrix" not in index_after.json()["content"]
 
 
-def test_incremental_wiki_reindex_projection_and_maintenance_logs(client, auth_headers, workspace_id):
+def test_wiki_projection_and_maintenance_logs(client, auth_headers, workspace_id):
     _upload_and_process(
         client,
         auth_headers,
@@ -717,24 +710,17 @@ def test_incremental_wiki_reindex_projection_and_maintenance_logs(client, auth_h
         "operations.txt",
         b"Operations workflow includes dashboard checks and invoice review.",
     )
-    chunks_before = client.post(
+    wiki_search = client.post(
         f"/api/workspaces/{workspace_id}/retrieval/search",
         headers=auth_headers,
         json={"query": "workspace index dashboard invoice"},
     )
-    assert chunks_before.status_code == 200
-    assert {row["source_type"] for row in chunks_before.json()}.intersection({"wiki_index", "wiki_backlinks"})
+    assert wiki_search.status_code == 200
+    assert {row["source_type"] for row in wiki_search.json()}.intersection({"wiki_index", "wiki_backlinks"})
 
     wiki = client.get(f"/api/workspaces/{workspace_id}/wiki", headers=auth_headers)
     page_id = wiki.json()[0]["id"]
-    reindexed = client.post(
-        f"/api/workspaces/{workspace_id}/wiki/reindex",
-        headers=auth_headers,
-        json={"page_ids": [page_id], "include_index": True},
-    )
-    assert reindexed.status_code == 200
-    assert reindexed.json()["page_ids"] == [page_id]
-    assert reindexed.json()["index_chunk_count"] > 0
+    assert page_id
 
     maintained = client.post(f"/api/workspaces/{workspace_id}/wiki/maintain", headers=auth_headers)
     assert maintained.status_code == 200
@@ -742,7 +728,7 @@ def test_incremental_wiki_reindex_projection_and_maintenance_logs(client, auth_h
 
     logs = client.get(f"/api/workspaces/{workspace_id}/wiki/maintenance-logs", headers=auth_headers)
     assert logs.status_code == 200
-    assert logs.json()[0]["action"] == "validate_and_reindex"
+    assert logs.json()[0]["action"] == "validate_wiki"
 
 
 def test_wiki_maintenance_quarantines_prompt_injection_text(client, auth_headers, workspace_id):
@@ -771,7 +757,7 @@ def test_wiki_maintenance_quarantines_prompt_injection_text(client, auth_headers
     assert maintained.json()["issues"][0]["issue"] == "prompt_injection_text"
 
 
-def test_wiki_maintenance_merges_duplicates_repairs_lint_and_reindexes(client, auth_headers, workspace_id):
+def test_wiki_maintenance_merges_duplicates_repairs_lint_and_rebuilds_graph(client, auth_headers, workspace_id):
     _upload_and_process(
         client,
         auth_headers,
@@ -838,10 +824,10 @@ def test_wiki_maintenance_merges_duplicates_repairs_lint_and_reindexes(client, a
 
     logs = client.get(f"/api/workspaces/{workspace_id}/wiki/maintenance-logs", headers=auth_headers)
     assert logs.status_code == 200
-    assert logs.json()[0]["action"] == "autonomous_repair_and_reindex"
+    assert logs.json()[0]["action"] == "autonomous_repair"
 
 
-def test_workspace_wiki_rag_end_to_end_acceptance(client, auth_headers, workspace_id):
+def test_workspace_wiki_end_to_end_acceptance(client, auth_headers, workspace_id):
     _upload_and_process(
         client,
         auth_headers,
@@ -887,12 +873,6 @@ def test_workspace_wiki_rag_end_to_end_acceptance(client, auth_headers, workspac
         },
     )
     assert edited.status_code == 200
-    reindexed = client.post(
-        f"/api/workspaces/{workspace_id}/wiki/reindex",
-        headers=auth_headers,
-        json={"page_ids": [page["id"]], "include_index": True},
-    )
-    assert reindexed.status_code == 200
 
     follow_up = client.post(
         f"/api/workspaces/{workspace_id}/ask",
@@ -923,7 +903,7 @@ def test_workspace_wiki_rag_end_to_end_acceptance(client, auth_headers, workspac
     assert voice.json()["audio_bytes"] > 0
 
 
-def test_scanned_pdf_ocr_output_is_stored_and_indexed(client, auth_headers, workspace_id):
+def test_scanned_pdf_ocr_output_is_stored_and_available_in_wiki(client, auth_headers, workspace_id):
     buffer = BytesIO()
     writer = PdfWriter()
     writer.add_blank_page(width=200, height=200)
@@ -943,7 +923,7 @@ def test_scanned_pdf_ocr_output_is_stored_and_indexed(client, auth_headers, work
         app.dependency_overrides.pop(ocr_dependency, None)
 
     assert processed.status_code == 200
-    assert processed.json()["chunk_count"] > 0
+    assert processed.json()["wiki_file_count"] > 0
 
     source = client.get(f"/api/documents/{document_id}/source", headers=auth_headers)
     extracted = source.json()["extracted"]
@@ -953,7 +933,6 @@ def test_scanned_pdf_ocr_output_is_stored_and_indexed(client, auth_headers, work
 
     metadata_path = processed.json()["extracted"]["metadata_storage_path"]
     assert metadata_path.endswith("metadata.json")
-    assert source.json()["chunks"] == []
 
     search = client.post(
         f"/api/workspaces/{workspace_id}/retrieval/search",
@@ -1033,13 +1012,13 @@ def test_failed_extraction_marks_document_failed(non_raising_client):
     document_id = upload.json()["id"]
 
     processed = non_raising_client.post(f"/api/documents/{document_id}/process", headers=headers)
-    assert processed.status_code == 500
-    assert processed.json()["error"]["message"] == "Internal server error"
+    assert processed.status_code == 503
+    assert processed.json()["error"]["message"] == "Document processing failed. Please try again."
 
     status = non_raising_client.get(f"/api/documents/{document_id}/status", headers=headers)
     assert status.status_code == 200
     assert status.json()["status"] == "failed"
-    assert status.json()["error_message"]
+    assert status.json()["error_message"] == "Document processing failed. Please try again."
 
 
 def test_health_details_metrics_and_request_id(client):
@@ -1094,6 +1073,8 @@ class FakeTTS:
 
 
 class FakeFastLLM:
+    api_key = "test-key"
+
     def answer(self, question: str, context: str) -> str:
         assert question
         assert context
@@ -1103,6 +1084,12 @@ class FakeFastLLM:
         assert question
         assert context
         yield "The late payment penalty is 2 percent."
+
+    def title(self, messages: list[dict]) -> str:
+        return "Document Overview"
+
+    def summarize_conversation(self, existing_summary: str, messages: list[dict]) -> str:
+        return "User goals: answer questions from uploaded documents."
 
 
 class FakeSummaryLLM(FakeFastLLM):

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.application.workspaces.service import WorkspaceService
 from app.infrastructure.db.models import UserModel
 from app.infrastructure.db.session import get_db
-from app.interfaces.api.dependencies import get_current_user, storage_dependency, vector_search_dependency
+from app.interfaces.api.dependencies import get_current_user, storage_dependency
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 
@@ -62,7 +62,6 @@ def delete_workspace(
     workspace_id: str,
     db: Session = Depends(get_db),
     user: UserModel = Depends(get_current_user),
-    vector_search=Depends(vector_search_dependency),
     storage=Depends(storage_dependency),
 ) -> dict:
-    return WorkspaceService(db, vector_search=vector_search, storage=storage).delete(user.id, workspace_id)
+    return WorkspaceService(db, storage=storage).delete(user.id, workspace_id)

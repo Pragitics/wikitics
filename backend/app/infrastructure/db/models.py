@@ -153,25 +153,6 @@ class WikiMaintenanceLogModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class ChunkModel(Base):
-    __tablename__ = "chunks"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), index=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
-    document_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("documents.id"), nullable=True, index=True)
-    wiki_page_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("wiki_pages.id"), nullable=True, index=True)
-    source_type: Mapped[str] = mapped_column(String(50), index=True)
-    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    heading: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    content: Mapped[str] = mapped_column(Text)
-    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    qdrant_point_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
 class ConversationModel(Base):
     __tablename__ = "conversations"
 
@@ -204,7 +185,6 @@ class CitationModel(Base):
     message_id: Mapped[str] = mapped_column(String(36), ForeignKey("messages.id"), index=True)
     document_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("documents.id"), nullable=True)
     wiki_page_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("wiki_pages.id"), nullable=True)
-    chunk_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("chunks.id"), nullable=True)
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quote: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

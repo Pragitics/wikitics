@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 
 from app.application.workspaces.access import ensure_workspace_member
 from app.infrastructure.db.models import (
-    ChunkModel,
     CitationModel,
     ConversationModel,
     DocumentModel,
@@ -27,9 +26,8 @@ VOICE_STYLE_PREFERENCES = {"auto", "english", "hinglish", "tanglish", "regional_
 
 
 class WorkspaceService:
-    def __init__(self, db: Session, vector_search=None, storage=None) -> None:
+    def __init__(self, db: Session, storage=None) -> None:
         self.db = db
-        self.vector_search = vector_search
         self.storage = storage
 
     def create(self, user_id: str, name: str) -> dict:
@@ -95,7 +93,6 @@ class WorkspaceService:
         raw_prefixes = {f"raw/{document.uploaded_by}/{workspace_id}" for document in documents}
         extracted_prefixes = {f"extracted/{document.id}" for document in documents}
         wiki_page_ids = [row.id for row in self.db.query(WikiPageModel.id).filter(WikiPageModel.workspace_id == workspace_id).all()]
-        chunk_ids = [row.id for row in self.db.query(ChunkModel.id).filter(ChunkModel.workspace_id == workspace_id).all()]
         conversation_ids = [
             row.id for row in self.db.query(ConversationModel.id).filter(ConversationModel.workspace_id == workspace_id).all()
         ]
@@ -105,14 +102,9 @@ class WorkspaceService:
                 row.id for row in self.db.query(MessageModel.id).filter(MessageModel.conversation_id.in_(conversation_ids)).all()
             ]
 
-        if self.vector_search is not None:
-            self.vector_search.delete_workspace(user_id, workspace_id)
-
         citation_filters = []
         if message_ids:
             citation_filters.append(CitationModel.message_id.in_(message_ids))
-        if chunk_ids:
-            citation_filters.append(CitationModel.chunk_id.in_(chunk_ids))
         if document_ids:
             citation_filters.append(CitationModel.document_id.in_(document_ids))
         if wiki_page_ids:
@@ -124,7 +116,6 @@ class WorkspaceService:
         if conversation_ids:
             self.db.query(MessageModel).filter(MessageModel.conversation_id.in_(conversation_ids)).delete(synchronize_session=False)
         self.db.query(ConversationModel).filter(ConversationModel.workspace_id == workspace_id).delete(synchronize_session=False)
-        self.db.query(ChunkModel).filter(ChunkModel.workspace_id == workspace_id).delete(synchronize_session=False)
         self.db.query(WikiLinkModel).filter(WikiLinkModel.workspace_id == workspace_id).delete(synchronize_session=False)
         self.db.query(WikiAbsorbLogModel).filter(WikiAbsorbLogModel.workspace_id == workspace_id).delete(synchronize_session=False)
         self.db.query(WikiRevisionModel).filter(WikiRevisionModel.workspace_id == workspace_id).delete(synchronize_session=False)

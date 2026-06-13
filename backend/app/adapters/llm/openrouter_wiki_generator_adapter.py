@@ -2,11 +2,11 @@ import json
 
 import httpx
 
-from app.application.wiki.generator import DeterministicWikiGenerator
 from app.domain.documents.entities import ExtractedDocument
 from app.domain.wiki.entities import WikiBundle, WikiPage
 from app.shared.ids import new_id
-from app.shared.retry import retry_call
+from app.shared.retry import RetryError, retry_call
+from app.shared.user_errors import DOCUMENT_PROCESSING_UNAVAILABLE
 
 
 class OpenRouterWikiGeneratorAdapter:
@@ -14,7 +14,6 @@ class OpenRouterWikiGeneratorAdapter:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.fallback = DeterministicWikiGenerator()
 
     def generate(
         self,
@@ -24,10 +23,10 @@ class OpenRouterWikiGeneratorAdapter:
     ) -> WikiBundle:
         existing_pages = existing_pages or []
         if not self.api_key:
-            return self.fallback.generate(workspace_id, document, existing_pages=existing_pages)
+            raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE)
         if not existing_pages:
             data = self._call_json(self._initial_messages(document))
-            return self._bundle_from_pages_data(workspace_id, document, [], data, allow_fallback=False)
+            return self._bundle_from_pages_data(workspace_id, document, [], data)
         state = {page.id: page for page in existing_pages}
         messages = self._agent_messages(document, existing_pages)
         changed_page_ids: list[str] = []
@@ -38,10 +37,10 @@ class OpenRouterWikiGeneratorAdapter:
         for _ in range(10):
             data = self._call_json(messages)
             if "pages" in data:
-                return self._bundle_from_pages_data(workspace_id, document, existing_pages, data, allow_fallback=False)
+                return self._bundle_from_pages_data(workspace_id, document, existing_pages, data)
             action = str(data.get("action") or "").strip().lower()
             if not action:
-                raise ValueError("Wiki editor agent returned no action")
+                raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE)
 
             if action == "finish":
                 if not changed_page_ids:
@@ -83,10 +82,10 @@ class OpenRouterWikiGeneratorAdapter:
                 ]
             )
         else:
-            raise ValueError("Wiki editor agent did not finish within step limit")
+            raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE)
 
         if not changed_page_ids:
-            raise ValueError("Wiki editor agent finished without creating or updating any wiki page")
+            raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE)
 
         pages = [state[page_id] for page_id in changed_page_ids]
         return WikiBundle(
@@ -211,9 +210,12 @@ class OpenRouterWikiGeneratorAdapter:
                 response.raise_for_status()
                 return response
 
-        response = retry_call(call_provider, attempts=3, retry_exceptions=(httpx.HTTPError,))
-        content = response.json()["choices"][0]["message"]["content"]
-        return json.loads(content)
+        try:
+            response = retry_call(call_provider, attempts=3, retry_exceptions=(httpx.HTTPError,))
+            content = response.json()["choices"][0]["message"]["content"]
+            return json.loads(content)
+        except (KeyError, RetryError, ValueError, httpx.HTTPError) as exc:
+            raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE) from exc
 
     def _bundle_from_pages_data(
         self,
@@ -221,7 +223,6 @@ class OpenRouterWikiGeneratorAdapter:
         document: ExtractedDocument,
         existing_pages: list[WikiPage],
         data: dict,
-        allow_fallback: bool = True,
     ) -> WikiBundle:
         existing_by_id = {page.id: page for page in existing_pages}
         pages = [
@@ -239,9 +240,7 @@ class OpenRouterWikiGeneratorAdapter:
             if page.get("content")
         ]
         if not pages:
-            if allow_fallback:
-                return self.fallback.generate(workspace_id, document, existing_pages=existing_pages)
-            raise ValueError("Wiki generation returned no pages")
+            raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE)
         state = {page.id: page for page in pages}
         return WikiBundle(
             pages=pages,

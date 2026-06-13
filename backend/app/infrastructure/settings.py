@@ -17,11 +17,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./wikitics.db"
     redis_url: str = "redis://localhost:6379/0"
 
-    qdrant_url: str = "http://localhost:6333"
-    qdrant_collection: str = "wikitics_chunks"
-    embedding_dimension: int = 64
-    vector_backend: str = "local"
-
     storage_backend: str = "local"
     local_storage_root: str = "./storage"
     s3_endpoint_url: str = "http://localhost:9000"

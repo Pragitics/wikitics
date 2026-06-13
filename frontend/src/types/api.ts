@@ -109,31 +109,10 @@ export type ExtractedDocument = {
   pages?: ExtractedPage[];
 };
 
-export type SourceChunk = {
-  id: string;
-  workspace_id: string;
-  document_id: string | null;
-  wiki_page_id: string | null;
-  source_type: string;
-  title: string;
-  heading: string | null;
-  path: string | null;
-  content: string;
-  page_number: number | null;
-  metadata: Record<string, unknown>;
-};
-
 export type SourceResponse = {
   document: DocumentRecord;
   extracted: ExtractedDocument;
   wiki_pages: WikiPage[];
-  chunks: SourceChunk[];
-};
-
-export type RebuildResponse = {
-  workspace_id: string;
-  chunk_count: number;
-  status: string;
 };
 
 export type ConversationSummary = {

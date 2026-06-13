@@ -7,11 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.adapters.llm.openrouter_wiki_maintenance_adapter import OpenRouterWikiMaintenanceAdapter
 from app.application.documents.service import serialize_wiki_page, workspace_backlinks, workspace_index_content
-from app.application.wiki.chunking import chunk_wiki_backlinks, chunk_wiki_index, chunk_wiki_page
 from app.application.workspaces.access import ensure_workspace_member
-from app.domain.wiki.entities import WikiPage
 from app.infrastructure.db.models import (
-    ChunkModel,
     CitationModel,
     DocumentModel,
     UserModel,
@@ -23,8 +20,9 @@ from app.infrastructure.db.models import (
 )
 from app.infrastructure.db.session import get_db
 from app.infrastructure.settings import Settings
-from app.interfaces.api.dependencies import embedding_dependency, get_current_user, settings_dependency, storage_dependency, vector_search_dependency
+from app.interfaces.api.dependencies import get_current_user, settings_dependency, storage_dependency
 from app.shared.ids import new_id
+from app.shared.user_errors import AI_SERVICE_UNAVAILABLE
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/wiki", tags=["wiki"])
 
@@ -49,11 +47,6 @@ class WikiPageCreateRequest(BaseModel):
 class WikiPageRevertRequest(BaseModel):
     revision_id: str
     edit_note: str | None = None
-
-
-class WikiReindexRequest(BaseModel):
-    page_ids: list[str] | None = None
-    include_index: bool = True
 
 
 @router.get("")
@@ -88,8 +81,6 @@ def create_wiki_page(
     db: Session = Depends(get_db),
     user: UserModel = Depends(get_current_user),
     storage=Depends(storage_dependency),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
 ) -> dict:
     ensure_workspace_member(db, user.id, workspace_id)
     title = payload.title.strip()
@@ -117,8 +108,6 @@ def create_wiki_page(
     db.refresh(page)
     _write_wiki_page(storage, workspace_id, page)
     _rebuild_workspace_graph(db, storage, workspace_id)
-    _reindex_wiki_page(db, embeddings, vector_search, user.id, page)
-    _reindex_wiki_projection(db, storage, embeddings, vector_search, user.id, workspace_id)
     return serialize_wiki_page(page)
 
 
@@ -130,8 +119,6 @@ def update_wiki_page(
     db: Session = Depends(get_db),
     user: UserModel = Depends(get_current_user),
     storage=Depends(storage_dependency),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
 ) -> dict:
     ensure_workspace_member(db, user.id, workspace_id)
     page = _wiki_page_or_404(db, workspace_id, page_id)
@@ -148,7 +135,6 @@ def update_wiki_page(
     db.refresh(page)
     _write_wiki_page(storage, workspace_id, page)
     _rebuild_workspace_graph(db, storage, workspace_id)
-    _reindex_wiki_page(db, embeddings, vector_search, user.id, page)
     return serialize_wiki_page(page)
 
 
@@ -159,8 +145,6 @@ def delete_wiki_page(
     db: Session = Depends(get_db),
     user: UserModel = Depends(get_current_user),
     storage=Depends(storage_dependency),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
 ) -> dict:
     ensure_workspace_member(db, user.id, workspace_id)
     page = _wiki_page_or_404(db, workspace_id, page_id)
@@ -169,7 +153,6 @@ def delete_wiki_page(
         {CitationModel.wiki_page_id: None},
         synchronize_session=False,
     )
-    _delete_page_chunks(db, vector_search, user.id, workspace_id, page.id)
     db.query(WikiRevisionModel).filter(
         WikiRevisionModel.workspace_id == workspace_id,
         WikiRevisionModel.page_id == page.id,
@@ -186,7 +169,6 @@ def delete_wiki_page(
     db.commit()
     storage.delete(str(PurePosixPath("wiki") / workspace_id / PurePosixPath(deleted_path).name))
     _rebuild_workspace_graph(db, storage, workspace_id)
-    _reindex_wiki_projection(db, storage, embeddings, vector_search, user.id, workspace_id)
     return {"deleted": True, "page_id": page_id, "workspace_id": workspace_id}
 
 
@@ -216,8 +198,6 @@ def revert_wiki_page(
     db: Session = Depends(get_db),
     user: UserModel = Depends(get_current_user),
     storage=Depends(storage_dependency),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
 ) -> dict:
     ensure_workspace_member(db, user.id, workspace_id)
     page = _wiki_page_or_404(db, workspace_id, page_id)
@@ -240,52 +220,7 @@ def revert_wiki_page(
     db.refresh(page)
     _write_wiki_page(storage, workspace_id, page)
     _rebuild_workspace_graph(db, storage, workspace_id)
-    _reindex_wiki_page(db, embeddings, vector_search, user.id, page)
     return serialize_wiki_page(page)
-
-
-@router.post("/pages/{page_id}/reindex")
-def reindex_wiki_page(
-    workspace_id: str,
-    page_id: str,
-    db: Session = Depends(get_db),
-    user: UserModel = Depends(get_current_user),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
-) -> dict:
-    ensure_workspace_member(db, user.id, workspace_id)
-    page = _wiki_page_or_404(db, workspace_id, page_id)
-    chunk_count = _reindex_wiki_page(db, embeddings, vector_search, user.id, page)
-    return {"workspace_id": workspace_id, "page_id": page_id, "chunk_count": chunk_count, "status": "reindexed"}
-
-
-@router.post("/reindex")
-def reindex_wiki_pages(
-    workspace_id: str,
-    payload: WikiReindexRequest | None = None,
-    db: Session = Depends(get_db),
-    user: UserModel = Depends(get_current_user),
-    storage=Depends(storage_dependency),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
-) -> dict:
-    ensure_workspace_member(db, user.id, workspace_id)
-    page_ids = payload.page_ids if payload and payload.page_ids else None
-    query = db.query(WikiPageModel).filter(WikiPageModel.workspace_id == workspace_id)
-    if page_ids:
-        query = query.filter(WikiPageModel.id.in_(page_ids))
-    pages = query.order_by(WikiPageModel.title.asc()).all()
-    chunk_count = sum(_reindex_wiki_page(db, embeddings, vector_search, user.id, page) for page in pages)
-    index_chunk_count = 0
-    if payload is None or payload.include_index:
-        index_chunk_count = _reindex_wiki_projection(db, storage, embeddings, vector_search, user.id, workspace_id)
-    return {
-        "workspace_id": workspace_id,
-        "page_ids": [page.id for page in pages],
-        "chunk_count": chunk_count + index_chunk_count,
-        "index_chunk_count": index_chunk_count,
-        "status": "reindexed",
-    }
 
 
 @router.get("/index")
@@ -324,8 +259,6 @@ def maintain_wiki(
     db: Session = Depends(get_db),
     user: UserModel = Depends(get_current_user),
     storage=Depends(storage_dependency),
-    embeddings=Depends(embedding_dependency),
-    vector_search=Depends(vector_search_dependency),
     settings: Settings = Depends(settings_dependency),
 ) -> dict:
     ensure_workspace_member(db, user.id, workspace_id)
@@ -349,7 +282,7 @@ def maintain_wiki(
         str(settings.openrouter_base_url),
         settings.openrouter_wiki_model,
     )
-    repair_result = _repair_wiki_pages(db, storage, embeddings, vector_search, user.id, workspace_id, pages, maintainer)
+    repair_result = _repair_wiki_pages(db, storage, user.id, workspace_id, pages, maintainer)
     pages = db.query(WikiPageModel).filter(WikiPageModel.workspace_id == workspace_id).order_by(WikiPageModel.title.asc()).all()
     remaining_issues = validate_wiki_pages(pages)
     if remaining_issues:
@@ -371,16 +304,7 @@ def maintain_wiki(
 
     _rebuild_workspace_graph(db, storage, workspace_id)
     changed_page_ids = repair_result["changed_page_ids"]
-    changed_pages = (
-        db.query(WikiPageModel)
-        .filter(WikiPageModel.workspace_id == workspace_id, WikiPageModel.id.in_(changed_page_ids))
-        .all()
-        if changed_page_ids
-        else []
-    )
-    page_chunk_count = sum(_reindex_wiki_page(db, embeddings, vector_search, user.id, page) for page in changed_pages)
-    index_chunk_count = _reindex_wiki_projection(db, storage, embeddings, vector_search, user.id, workspace_id)
-    action = "autonomous_repair_and_reindex" if repair_result["actions"] else "validate_and_reindex"
+    action = "autonomous_repair" if repair_result["actions"] else "validate_wiki"
     log = WikiMaintenanceLogModel(
         id=new_id(),
         workspace_id=workspace_id,
@@ -388,8 +312,6 @@ def maintain_wiki(
         action=action,
         details_json={
             "page_count": len(pages),
-            "page_chunk_count": page_chunk_count,
-            "index_chunk_count": index_chunk_count,
             **repair_result,
         },
     )
@@ -402,7 +324,6 @@ def maintain_wiki(
         "changed_page_ids": changed_page_ids,
         "deleted_page_ids": repair_result["deleted_page_ids"],
         "actions": repair_result["actions"],
-        "index_chunk_count": index_chunk_count,
     }
 
 
@@ -557,11 +478,6 @@ def _write_wiki_page(storage, workspace_id: str, page: WikiPageModel) -> None:
     storage.save_text(str(PurePosixPath("wiki") / workspace_id / PurePosixPath(page.path).name), page.content)
 
 
-def _rebuild_workspace_index(db: Session, storage, workspace_id: str) -> None:
-    pages = db.query(WikiPageModel).filter(WikiPageModel.workspace_id == workspace_id).order_by(WikiPageModel.title.asc()).all()
-    storage.save_text(str(PurePosixPath("wiki") / workspace_id / "INDEX.md"), workspace_index_content(pages))
-
-
 def _rebuild_workspace_graph(db: Session, storage, workspace_id: str) -> None:
     pages = db.query(WikiPageModel).filter(WikiPageModel.workspace_id == workspace_id).order_by(WikiPageModel.title.asc()).all()
     wiki_root = PurePosixPath("wiki") / workspace_id
@@ -572,8 +488,6 @@ def _rebuild_workspace_graph(db: Session, storage, workspace_id: str) -> None:
 def _repair_wiki_pages(
     db: Session,
     storage,
-    embeddings,
-    vector_search,
     user_id: str,
     workspace_id: str,
     pages: list[WikiPageModel],
@@ -596,17 +510,14 @@ def _repair_wiki_pages(
         _save_revision(db, primary, user_id, "llm_maintenance", "Before autonomous duplicate merge")
         for duplicate in duplicates:
             merge_plan = _safe_merge_plan(maintainer, primary, duplicate)
-            if merge_plan:
-                primary.content = merge_plan["content"]
-                primary.summary = merge_plan["summary"] or _merge_text(primary.summary, duplicate.summary)
-            else:
-                primary.content = _merge_duplicate_page_content(primary, duplicate)
-                primary.summary = _merge_text(primary.summary, duplicate.summary)
+            if not merge_plan:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=AI_SERVICE_UNAVAILABLE)
+            primary.content = merge_plan["content"]
+            primary.summary = merge_plan["summary"] or _merge_text(primary.summary, duplicate.summary)
             primary.created_from_document_ids = sorted(
                 set((primary.created_from_document_ids or []) + (duplicate.created_from_document_ids or []))
             )
             _save_revision(db, duplicate, user_id, "llm_maintenance", "Before autonomous duplicate removal")
-            _delete_page_chunks(db, vector_search, user_id, workspace_id, duplicate.id)
             if duplicate.path != primary.path:
                 storage.delete(str(PurePosixPath("wiki") / workspace_id / PurePosixPath(duplicate.path).name))
             db.delete(duplicate)
@@ -617,7 +528,7 @@ def _repair_wiki_pages(
                 "action": "merge_duplicate_pages",
                 "page_id": primary.id,
                 "merged_page_ids": [page.id for page in duplicates],
-                "strategy": "llm" if maintainer and getattr(maintainer, "api_key", "") else "deterministic",
+                "strategy": "llm",
             }
         )
 
@@ -657,20 +568,6 @@ def _duplicate_page_groups(pages: list[WikiPageModel]) -> list[list[WikiPageMode
     return [group for group in groups.values() if len(group) > 1]
 
 
-def _merge_duplicate_page_content(primary: WikiPageModel, duplicate: WikiPageModel) -> str:
-    existing = primary.content.rstrip()
-    candidate = duplicate.content.strip()
-    if not candidate or candidate in existing:
-        return existing
-    return "\n\n".join(
-        [
-            existing,
-            f"## Merged From {duplicate.title}",
-            candidate,
-        ]
-    ).strip()
-
-
 def _safe_merge_plan(maintainer, primary: WikiPageModel, duplicate: WikiPageModel) -> dict | None:
     if maintainer is None:
         return None
@@ -704,135 +601,3 @@ def _merge_text(first: str, second: str) -> str:
     if not first_value:
         return second_value[:1000]
     return f"{first_value} {second_value}"[:1000]
-
-
-def _delete_page_chunks(db: Session, vector_search, user_id: str, workspace_id: str, page_id: str) -> None:
-    rows = db.query(ChunkModel.id).filter(ChunkModel.workspace_id == workspace_id, ChunkModel.wiki_page_id == page_id).all()
-    chunk_ids = [row.id for row in rows]
-    if not chunk_ids:
-        return
-    db.query(CitationModel).filter(CitationModel.chunk_id.in_(chunk_ids)).update(
-        {CitationModel.chunk_id: None},
-        synchronize_session=False,
-    )
-    db.query(ChunkModel).filter(ChunkModel.id.in_(chunk_ids)).delete(synchronize_session=False)
-    if hasattr(vector_search, "delete_wiki_pages"):
-        vector_search.delete_wiki_pages(user_id, workspace_id, [page_id])
-    elif hasattr(vector_search, "delete_chunks"):
-        vector_search.delete_chunks(chunk_ids)
-
-
-def _reindex_wiki_page(db: Session, embeddings, vector_search, user_id: str, page: WikiPageModel) -> int:
-    rows = db.query(ChunkModel.id).filter(ChunkModel.workspace_id == page.workspace_id, ChunkModel.wiki_page_id == page.id).all()
-    chunk_ids = [row.id for row in rows]
-    if chunk_ids:
-        db.query(CitationModel).filter(CitationModel.chunk_id.in_(chunk_ids)).update(
-            {CitationModel.chunk_id: None},
-            synchronize_session=False,
-        )
-        db.query(ChunkModel).filter(ChunkModel.id.in_(chunk_ids)).delete(synchronize_session=False)
-        if hasattr(vector_search, "delete_wiki_pages"):
-            vector_search.delete_wiki_pages(user_id, page.workspace_id, [page.id])
-        elif hasattr(vector_search, "delete_chunks"):
-            vector_search.delete_chunks(chunk_ids)
-        db.commit()
-
-    chunks = chunk_wiki_page(
-        _page_entity(page),
-        user_id,
-        document_filenames=_workspace_document_filenames(db, page.workspace_id),
-    )
-    vectors = [embeddings.embed(chunk.content) for chunk in chunks]
-    vector_search.upsert_chunks(chunks, vectors)
-    for chunk in chunks:
-        db.add(
-            ChunkModel(
-                id=chunk.id,
-                workspace_id=chunk.workspace_id,
-                user_id=chunk.user_id,
-                document_id=chunk.document_id,
-                wiki_page_id=chunk.wiki_page_id,
-                source_type=chunk.source_type,
-                title=chunk.title,
-                heading=chunk.heading,
-                path=chunk.path,
-                content=chunk.content,
-                page_number=chunk.page_number,
-                qdrant_point_id=chunk.id,
-                metadata_json=chunk.metadata,
-            )
-        )
-    db.commit()
-    return len(chunks)
-
-
-def _reindex_wiki_projection(db: Session, storage, embeddings, vector_search, user_id: str, workspace_id: str) -> int:
-    rows = (
-        db.query(ChunkModel.id)
-        .filter(
-            ChunkModel.workspace_id == workspace_id,
-            ChunkModel.user_id == user_id,
-            ChunkModel.source_type.in_(["wiki_index", "wiki_backlinks", "raw"]),
-        )
-        .all()
-    )
-    chunk_ids = [row.id for row in rows]
-    if chunk_ids:
-        db.query(CitationModel).filter(CitationModel.chunk_id.in_(chunk_ids)).update(
-            {CitationModel.chunk_id: None},
-            synchronize_session=False,
-        )
-        db.query(ChunkModel).filter(ChunkModel.id.in_(chunk_ids)).delete(synchronize_session=False)
-        if hasattr(vector_search, "delete_chunks"):
-            vector_search.delete_chunks(chunk_ids)
-        db.commit()
-
-    index_path = f"wiki/{workspace_id}/INDEX.md"
-    backlinks_path = f"wiki/{workspace_id}/_backlinks.json"
-    index_content = storage.read_text(index_path) if storage.exists(index_path) else ""
-    backlinks = json.loads(storage.read_text(backlinks_path)) if storage.exists(backlinks_path) else {}
-    chunks = [
-        *chunk_wiki_index(workspace_id, user_id, index_content),
-        *chunk_wiki_backlinks(workspace_id, user_id, backlinks),
-    ]
-    vectors = [embeddings.embed(chunk.content) for chunk in chunks]
-    vector_search.upsert_chunks(chunks, vectors)
-    for chunk in chunks:
-        db.add(
-            ChunkModel(
-                id=chunk.id,
-                workspace_id=chunk.workspace_id,
-                user_id=chunk.user_id,
-                document_id=chunk.document_id,
-                wiki_page_id=chunk.wiki_page_id,
-                source_type=chunk.source_type,
-                title=chunk.title,
-                heading=chunk.heading,
-                path=chunk.path,
-                content=chunk.content,
-                page_number=chunk.page_number,
-                qdrant_point_id=chunk.id,
-                metadata_json=chunk.metadata,
-            )
-        )
-    db.commit()
-    return len(chunks)
-
-
-def _page_entity(page: WikiPageModel) -> WikiPage:
-    return WikiPage(
-        id=page.id,
-        workspace_id=page.workspace_id,
-        title=page.title,
-        path=page.path,
-        content=page.content,
-        summary=page.summary,
-        created_from_document_ids=page.created_from_document_ids or [],
-    )
-
-
-def _workspace_document_filenames(db: Session, workspace_id: str) -> dict[str, str]:
-    return {
-        row.id: row.filename
-        for row in db.query(DocumentModel.id, DocumentModel.filename).filter(DocumentModel.workspace_id == workspace_id).all()
-    }

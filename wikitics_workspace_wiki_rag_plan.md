@@ -1,4 +1,4 @@
-# Wikitics Workspace Wiki And RAG Evolution Plan
+# Wikitics Workspace Wiki Evolution Plan
 
 Source of truth:
 
@@ -16,7 +16,7 @@ User
   Workspaces
     Documents
     Workspace Wiki
-    Wiki-first RAG Index
+    INDEX.md and backlinks
     Conversations
 ```
 
@@ -31,13 +31,12 @@ Conversations should not own documents. Conversations should only reference the 
 - Text and voice Q&A are scoped by `user_id` and `workspace_id`.
 - Conversations are stored per workspace and can be continued by `conversation_id`.
 - If no `conversation_id` is passed, backend creates a new conversation.
-- RAG currently retrieves from both raw document chunks and wiki chunks.
-- Target direction is wiki-first retrieval: store raw/extracted source for provenance and rebuilds, but embed the LLM-maintained wiki/index/backlink layer as the primary RAG corpus.
+- Retrieval now operates on the LLM-maintained workspace wiki, `INDEX.md`, and backlinks. Raw documents are stored for provenance and rebuilds, but are not chunked into a retrieval corpus.
 - Wiki pages are generated during document processing.
-- The current wiki pipeline is still document-centric.
-- Wiki pages can be listed/read, but cannot be manually edited through an API/UI yet.
-- The workspace index can be rebuilt, but there is not yet a fine-grained re-embed flow for one edited wiki page.
-- Conversation history is stored but is not yet included in the LLM prompt.
+- Later document uploads can update existing wiki pages or create new wiki pages.
+- Wiki pages can be listed/read/edited through backend APIs.
+- The workspace index and backlinks are rebuilt from wiki state.
+- Conversation history is stored and bounded memory is included in the LLM prompt.
 
 ## Target Architecture
 
@@ -58,22 +57,16 @@ Workspace
     absorb logs
     revisions
 
-  rag/
-    wiki chunks
-    wiki index chunks
-    backlink/concept-map chunks
-    embeddings
-
   conversations/
     message history
     rolling memory summary
 ```
 
-Raw documents remain the archival source of truth. The LLM-generated workspace wiki is the primary operating knowledge layer. RAG should primarily index wiki pages, wiki index pages, backlinks, summaries, and concept maps so the agent can quickly traverse the workspace knowledge base.
+Raw documents remain archival evidence. The LLM-generated workspace wiki is the primary operating knowledge layer. Retrieval should search wiki pages, wiki index pages, backlinks, summaries, and concept maps so the agent can traverse the workspace knowledge base without chunking raw source documents.
 
-Raw extracted/OCR text should still be stored, but it does not need to be embedded by default. It should be available for audit, re-absorb, provenance checks, and emergency/full rebuilds.
+Raw extracted/OCR text should still be stored, but it should not be embedded or chunked by default. It should be available for audit, re-absorb, provenance checks, and emergency/full rebuilds.
 
-The wiki maintenance loop should be autonomous. The LLM should create, edit, merge, lint, and repair the workspace wiki when new documents arrive or when a conversation reveals a missing concept. Human approval is not part of the normal path. The system should instead rely on provenance, confidence gates, audit logs, versioning, rollback, and automatic re-embedding.
+The wiki maintenance loop should be autonomous. The LLM should create, edit, merge, lint, and repair the workspace wiki when new documents arrive or when a conversation reveals a missing concept. Human approval is not part of the normal path. The system should instead rely on provenance, confidence gates, audit logs, versioning, rollback, and refreshed wiki indexes/backlinks.
 
 ## Autonomous Runtime Model
 
@@ -89,10 +82,10 @@ Stage responsibilities:
 - `Interpret`: extract/OCR text, tables, headings, metadata.
 - `Absorb`: LLM proposes wiki page creates/updates, backlinks, index changes, and source provenance.
 - `Normalize`: automatically merge aliases, resolve duplicate pages, apply confidence gates, version changed wiki pages.
-- `Derive`: rebuild wiki-first RAG projections from changed wiki pages, indexes, backlinks, and maps.
-- `Serve`: voice/chat answer using wiki-first RAG plus conversation memory.
+- `Derive`: rebuild `INDEX.md`, backlinks, and wiki search projections from changed wiki pages.
+- `Serve`: voice/chat answer using workspace wiki plus conversation memory.
 
-Only raw source, wiki canonical state, revisions, provenance, and audit logs are durable truth. RAG vectors are projections and can always be deleted/rebuilt.
+Only raw source, extracted text, wiki canonical state, revisions, provenance, and audit logs are durable truth. Search/index artifacts are projections and can always be deleted/rebuilt.
 
 ## UX Direction
 
@@ -122,7 +115,7 @@ Primary user flow:
 Create workspace -> Upload documents -> Wait for Ready -> Start voice/chat
 ```
 
-The main UI should stay minimal. Implementation details like embeddings, Qdrant, chunks, extraction, OCR, and wiki generation should be hidden behind simple user-facing states.
+The main UI should stay minimal. Implementation details like extraction, OCR, wiki generation, index rebuilds, and backlink updates should be hidden behind simple user-facing states.
 
 ## Phase 1 - Workspace And Conversation UX
 
@@ -168,14 +161,14 @@ Phase 1 test notes:
 - Frontend type check: `npm run lint` passed.
 - Frontend production build: `npm run build` passed.
 - Docker smoke: `docker compose up -d --build frontend` completed, Wikitics services are running, browser check passed with no console errors.
-- Live document smoke: `Softrate Workspace document .docx` uploaded through Docker API, processed to `ready`, and produced 158 chunks.
+- Live document smoke: `Softrate Workspace document .docx` uploaded through Docker API, processed to `ready`, and produced workspace wiki files.
 - UI polish smoke: sidebar shows `Upload documents` and `New chat`, no `Chat` or `Conversations` child item, new draft chat row appears, top bar is removed, and logout is in the sidebar.
 
 ## Phase 2 - Bounded Conversation Memory
 
 Goal: make follow-up questions work without sending unlimited history.
 
-Status: implemented. The QA path now loads bounded recent turns for an existing conversation, uses them to improve retrieval for follow-up questions, includes conversation memory in the LLM context pack, and keeps document/wiki context as the source of truth. Conversation titles are stored and generated after the answer path using `OPENROUTER_TITLE_MODEL` with deterministic fallback. Durable rolling summaries are handled by Phase 3.
+Status: implemented. The QA path now loads bounded recent turns for an existing conversation, uses them to improve retrieval for follow-up questions, includes conversation memory in the LLM context pack, and keeps document/wiki context as the source of truth. Conversation titles are stored and generated after the answer path using `OPENROUTER_TITLE_MODEL`; provider failures are surfaced softly instead of using deterministic fallback. Durable rolling summaries are handled by Phase 3.
 
 Current issue:
 
@@ -186,7 +179,7 @@ Target prompt inputs:
 
 ```text
 current question
-workspace RAG context
+workspace wiki context
 conversation memory summary
 last N turns
 voice/text style instructions
@@ -206,7 +199,7 @@ Implementation checklist:
 - [x] Add memory summary and recent turns to context pack.
   - [x] Durable memory summary
   - [x] Recent turns
-- [x] Keep document/wiki RAG context higher priority than memory.
+- [x] Keep workspace wiki context higher priority than memory.
 - [x] Add prompt rule: document content is source of truth; memory only resolves conversation references.
 - [x] Use bounded recent turns to improve retrieval for follow-up questions.
 - [x] Return conversation-memory size in `context_stats` for observability.
@@ -216,7 +209,7 @@ Implementation checklist:
 Testing checklist:
 
 - [x] Ask a follow-up like "what about the second one?" and verify bounded recent turns are loaded.
-- [x] Ask a document-grounded question after long chat history and verify RAG still dominates.
+- [x] Ask a document-grounded question after long chat history and verify workspace wiki context still dominates.
 - [ ] Verify voice prompt remains below target context size.
 - [x] Verify text prompt memory is bounded by character budget.
 
@@ -237,7 +230,7 @@ Flow:
 
 ```text
 User asks
-  -> answer uses existing summary + last turns + RAG
+  -> answer uses existing summary + last turns + workspace wiki
   -> save messages
   -> if conversation is long, enqueue summarizer job
   -> summarizer updates stored memory summary
@@ -274,7 +267,7 @@ Phase 3 test notes:
 - Backend targeted tests: `backend/.venv/bin/pytest backend/tests/unit/test_context.py backend/tests/unit/test_adapters.py::test_openrouter_summary_uses_configured_cheap_model backend/tests/integration/test_api_flow.py::test_async_conversation_summary_is_stored_and_used_next_turn backend/tests/integration/test_api_flow.py::test_conversation_summary_job_does_not_block_current_answer` passed.
 - Backend full suite: `backend/.venv/bin/pytest backend/tests` passed, 65 tests.
 - Docker smoke: `docker compose up -d --build backend agent-worker` completed, `/health` returned `ok`, and Postgres `conversations` has `memory_summary`, `memory_updated_at`, and `memory_message_cursor`.
-- The summarizer uses `OPENROUTER_SUMMARY_MODEL`, defaults to `openai/gpt-4o-mini`, and falls back to the local deterministic summarizer when no API key is configured.
+- The summarizer uses `OPENROUTER_SUMMARY_MODEL`, defaults to `openai/gpt-4o-mini`, and surfaces provider failures softly instead of using a deterministic summarizer.
 - The summary is injected into prompts as `Memory summary` beside bounded `Recent turns`; prompt rules keep uploaded document/wiki context as the source of truth.
 
 ## Phase 4 - Regional Code-Mixed Voice Style
@@ -343,7 +336,7 @@ Phase 4 test notes:
 
 Goal: adding a new document later should automatically update the workspace wiki instead of treating every document as an isolated wiki.
 
-Status: in progress. The deterministic workspace absorb path is implemented: later documents are compared against existing workspace wiki pages by path/title, same-concept pages are updated with sourced evidence, new concepts create new pages, workspace `INDEX.md` and backlinks are rewritten from all pages, per-document absorb logs are stored, and changed wiki/document chunks are replaced before re-indexing. LLM-backed planning, confidence gates, versioned patching, and quarantine remain pending.
+Status: in progress. The workspace absorb path is implemented: later documents are compared against existing workspace wiki pages by path/title, same-concept pages are updated with sourced evidence, new concepts create new pages, workspace `INDEX.md` and backlinks are rewritten from all pages, and per-document absorb logs are stored. LLM-backed planning, confidence gates, versioned patching, and quarantine remain pending.
 
 Current issue:
 
@@ -362,7 +355,7 @@ decide create/update/skip for each concept
 write changed wiki pages
 update backlinks and index
 write absorb log
-re-embed only changed wiki pages, wiki indexes, and backlinks
+refresh changed wiki pages, wiki indexes, and backlinks
 ```
 
 Absorb decisions:
@@ -372,7 +365,7 @@ Absorb decisions:
 - `append_evidence`: existing high-confidence page needs a safe sourced addition.
 - `skip`: duplicate or low-value content.
 - `auto_repair`: conflicting/stale data can be resolved from provenance.
-- `quarantine`: conflicting data cannot be safely resolved automatically; exclude from RAG and log for audit, but do not block the rest of the pipeline.
+- `quarantine`: conflicting data cannot be safely resolved automatically; exclude from active wiki search and log for audit, but do not block the rest of the pipeline.
 
 Implementation checklist:
 
@@ -382,13 +375,13 @@ Implementation checklist:
   - [x] backlinks
   - [x] absorb logs
 - [ ] Add `WikiAbsorbService`.
-- [ ] Add LLM-backed absorb planner with deterministic fallback.
+- [ ] Add LLM-backed absorb planner without deterministic fallback.
 - [x] Compare candidate document concepts against existing wiki pages.
 - [x] Track changed page IDs.
 - [x] Write absorb log for every document.
 - [x] Preserve raw document source links on wiki pages.
 - [ ] Protect existing high-confidence pages from blind overwrite by using versioned patches.
-- [x] Store source provenance for wiki claims so raw documents can be audited without embedding all raw text.
+- [x] Store source provenance for wiki claims so raw documents can be audited without chunking all raw text.
 - [x] Automatically promote high-confidence wiki changes.
 - [ ] Automatically quarantine low-confidence/conflicting claims instead of requiring human approval.
 
@@ -412,9 +405,9 @@ Phase 5 test notes:
 
 ## Phase 6 - Autonomous Wiki Editing And Versioning
 
-Goal: the LLM can edit the workspace wiki and RAG immediately reflects the change. Manual edit APIs may exist for admin/debug, but normal operation is autonomous.
+Goal: the LLM can edit the workspace wiki and wiki search immediately reflects the change. Manual edit APIs may exist for admin/debug, but normal operation is autonomous.
 
-Status: in progress. Admin/debug wiki edit, revision, revert, and page reindex APIs are implemented. Edits save the old page as a revision, update stored markdown, rebuild the workspace index, replace wiki page chunks/vectors, and allow rollback by revision. Autonomous LLM maintenance jobs, edit validation, backlink rebuild on rename, and generated-edit rollback remain pending.
+Status: in progress. Admin/debug wiki edit, revision, revert, and page refresh APIs are implemented. Edits save the old page as a revision, update stored markdown, rebuild the workspace index, refresh wiki search, and allow rollback by revision. Autonomous LLM maintenance jobs, edit validation, backlink rebuild on rename, and generated-edit rollback remain pending.
 
 API design:
 
@@ -448,7 +441,7 @@ Implementation checklist:
 - [x] Update stored markdown file.
 - [x] Rebuild wiki index if title/content changes.
 - [ ] Rebuild backlinks if title/path/content changes.
-- [x] Re-index edited page into RAG.
+- [x] Refresh edited page in wiki search.
 - [x] Add autonomous maintenance endpoint/job for create/edit/merge/lint/repair actions.
 - [ ] Add automatic rollback path if a generated edit fails validation.
 
@@ -457,9 +450,9 @@ Testing checklist:
 - [x] LLM maintenance job edits wiki page content.
 - [x] Verify page read returns edited content.
 - [x] Verify revision is created.
-- [x] Ask a question that depends on edited text and verify RAG uses the edited wiki.
-- [x] Revert a revision and verify RAG changes back after reindex.
-- [x] Invalid generated edit falls back or is quarantined and does not enter RAG.
+- [x] Ask a question that depends on edited text and verify wiki search uses the edited wiki.
+- [x] Revert a revision and verify wiki search changes back after refresh.
+- [x] Invalid generated edit is quarantined and does not enter active wiki search.
 
 Phase 6 test notes:
 
@@ -469,21 +462,21 @@ Phase 6 test notes:
 - Docker smoke: `docker compose up -d --build backend frontend agent-worker` completed, `/health` returned `ok`, and Postgres has `wiki_revisions`.
 - Implemented APIs: `PATCH /api/workspaces/{workspace_id}/wiki/pages/{page_id}`, `GET /api/workspaces/{workspace_id}/wiki/pages/{page_id}/revisions`, `POST /api/workspaces/{workspace_id}/wiki/pages/{page_id}/revert`, and `POST /api/workspaces/{workspace_id}/wiki/pages/{page_id}/reindex`.
 
-## Phase 7 - Incremental Wiki-First RAG Re-Embedding
+## Phase 7 - Incremental Wiki Search Refresh
 
-Goal: re-embed only changed wiki knowledge, not the entire workspace or all raw source text.
+Goal: refresh only changed wiki knowledge, not the entire workspace or all raw source text.
 
-Status: implemented as wiki-only reindexing. Changed wiki pages, workspace index, and backlinks are reindexed incrementally. Raw documents remain in storage and extracted metadata for provenance and future absorb, but they are no longer chunked into RAG. Delete-document repair/quarantine is still a future hardening item.
+Status: implemented as wiki-only search refresh. Changed wiki pages, workspace index, and backlinks are refreshed incrementally. Raw documents remain in storage and extracted metadata for provenance and future absorb, but they are not chunked. Delete-document repair/quarantine is still a future hardening item.
 
 Current full rebuild:
 
-- Deletes workspace chunks and rebuilds wiki page, index, and backlink chunks only.
+- Rebuilds wiki page, index, and backlink search inputs only.
 
 Target behavior:
 
-- RAG primarily stores wiki-derived chunks.
+- Wiki search operates only on wiki-derived content.
 - Raw extracted text stays in storage/database for provenance and future wiki absorb.
-- Raw chunks should not be part of the retrieval corpus.
+- Raw source text should not be chunked into the retrieval corpus.
 
 Target incremental flow:
 
@@ -492,19 +485,16 @@ For new document:
 ```text
 extract/OCR raw text
 absorb into workspace wiki
-embed changed wiki pages
-embed changed wiki index/backlink summaries
-replace changed wiki vectors
+refresh changed wiki pages
+refresh changed wiki index/backlink summaries
 ```
 
 For edited wiki page:
 
 ```text
-delete chunks/vectors where wiki_page_id = page_id
-chunk edited page
-embed chunks
-upsert vectors
-save chunks
+save edited page
+rebuild workspace index/backlinks
+refresh wiki search inputs
 ```
 
 For deleted document:
@@ -512,39 +502,38 @@ For deleted document:
 ```text
 mark affected wiki pages stale
 remove, repair, or quarantine claims sourced only from deleted document
-re-embed changed wiki pages/indexes
+refresh changed wiki pages/indexes
 ```
 
 Implementation checklist:
 
-- [x] Add vector delete by `wiki_page_id`.
-- [x] Add chunk replacement by `wiki_page_id`.
-- [x] Add chunk type for wiki index/backlink/concept-map entries.
-- [x] Add `reindex_wiki_pages(page_ids)`.
-- [x] Add `reindex_wiki_index(workspace_id)`.
-- [x] Make raw document embedding optional behind a setting/admin path.
+- [x] Remove vector/chunk replacement from runtime path.
+- [x] Search wiki page, index, and backlink content directly.
+- [x] Add `refresh_wiki_pages(page_ids)`.
+- [x] Add `refresh_wiki_index(workspace_id)`.
+- [x] Keep raw document chunking out of the runtime path.
 - [x] Keep full rebuild API as recovery/admin path.
 
 Testing checklist:
 
-- [x] Edit one wiki page and verify only that page's wiki chunks are replaced.
-- [x] Upload one new document and verify changed wiki/index vectors are replaced.
+- [x] Edit one wiki page and verify wiki search sees the changed page.
+- [x] Upload one new document and verify changed wiki/index/backlinks are refreshed.
 - [ ] Delete one document and verify affected wiki pages are marked stale, repaired, or quarantined.
-- [x] Full rebuild from stored raw documents still reconstructs the wiki/RAG state.
+- [x] Full rebuild from stored raw documents still reconstructs the wiki state.
 
 Phase 7 test notes:
 
 - Backend targeted tests: `backend/.venv/bin/pytest backend/tests/integration/test_api_flow.py::test_wiki_page_edit_revision_reindex_and_revert backend/tests/integration/test_api_flow.py::test_incremental_wiki_reindex_projection_and_maintenance_logs` passed.
 - Backend full suite: `backend/.venv/bin/pytest backend/tests` passed, 79 tests.
 - Frontend checks: `npm run test`, `npm run lint`, and `npm run build` passed.
-- Added `POST /api/workspaces/{workspace_id}/wiki/reindex` for multi-page and index/backlink projection reindexing.
-- Added `wiki_index` and `wiki_backlinks` RAG chunk projections.
+- Added `POST /api/workspaces/{workspace_id}/wiki/reindex` for multi-page and index/backlink refresh.
+- Added direct wiki index and backlink search inputs.
 
 ## Phase 8 - Autonomous Wiki Maintenance Loop
 
 Goal: LLM continuously maintains the workspace wiki without human approval, while the UI exposes auditability and rollback.
 
-Status: implemented for the guarded maintenance path. Document processing can use the configured OpenRouter wiki model to create/absorb workspace wiki pages, then refresh wiki-first RAG. The maintenance endpoint validates wiki pages, quarantines prompt-injection content, uses the configured OpenRouter wiki model to synthesize duplicate-page merges when provider keys are configured, falls back to deterministic repair when needed, repairs markdown lint issues, versions changes, rebuilds backlinks/indexes, and reindexes changed wiki projections.
+Status: implemented for the guarded maintenance path. Document processing can use the configured OpenRouter wiki model to create/absorb workspace wiki pages, then refresh wiki search inputs. The maintenance endpoint validates wiki pages, quarantines prompt-injection content, uses the configured OpenRouter wiki model to synthesize duplicate-page merges when provider keys are configured, repairs markdown lint issues, versions changes, rebuilds backlinks/indexes, and refreshes changed wiki projections.
 
 User-facing flow:
 
@@ -552,7 +541,7 @@ User-facing flow:
 Document uploaded
 Preparing
 Wiki maintained
-RAG refreshed
+Wiki search refreshed
 Ready
 ```
 
@@ -560,7 +549,7 @@ Implementation checklist:
 
 - [x] Add autonomous wiki maintenance endpoint.
 - [ ] Add autonomous wiki maintenance worker.
-- [x] Trigger wiki generation/absorb and RAG refresh after document process.
+- [x] Trigger wiki generation/absorb and wiki search refresh after document process.
 - [ ] Trigger maintenance when conversation answer detects missing wiki coverage.
 - [ ] Trigger maintenance on scheduled lint/staleness checks.
 - [ ] Validate generated wiki edits before writing:
@@ -570,7 +559,7 @@ Implementation checklist:
   - [x] page schema/frontmatter is valid
   - [x] backlinks/index are valid
 - [x] Commit valid autonomous maintenance updates automatically.
-- [x] Re-embed changed wiki projections automatically.
+- [x] Refresh changed wiki projections automatically.
 - [x] Expose read-only maintenance log API.
 - [x] Expose rollback, not approval, for admins.
 
@@ -578,11 +567,11 @@ Testing checklist:
 
 - [x] Low-risk new page is automatically committed during LLM document absorb when provider keys are configured.
 - [x] Existing page update is automatically absorbed during later document processing.
-- [x] Duplicate wiki pages are merged, versioned, and reindexed by autonomous maintenance.
-- [x] Wiki lint issues are repaired, versioned, and reindexed by autonomous maintenance.
+- [x] Duplicate wiki pages are merged, versioned, and refreshed by autonomous maintenance.
+- [x] Wiki lint issues are repaired, versioned, and refreshed by autonomous maintenance.
 - [x] Prompt-injection content is quarantined and logged.
-- [x] Valid maintenance rebuild updates wiki index projections in RAG.
-- [x] Rollback restores previous wiki content and RAG projection.
+- [x] Valid maintenance rebuild updates wiki index search projections.
+- [x] Rollback restores previous wiki content and search projection.
 
 Phase 8 test notes:
 
@@ -593,16 +582,16 @@ Phase 8 test notes:
 - Frontend checks: `npm run test`, `npm run lint`, and `npm run build` passed.
 - Implemented APIs: `POST /api/workspaces/{workspace_id}/wiki/maintain` and `GET /api/workspaces/{workspace_id}/wiki/maintenance-logs`.
 
-## Phase 9 - Wiki-First Retrieval Policy
+## Phase 9 - Wiki Retrieval Policy
 
-Goal: RAG should primarily operate on the workspace wiki, with raw documents used for provenance and rebuilds.
+Goal: retrieval should operate on the workspace wiki, with raw documents used for provenance and rebuilds.
 
-Status: implemented as strict wiki-first retrieval and prompting. Wiki, wiki index, and backlink chunks are the only retrieval corpus. Raw documents are retained only as stored evidence and provenance inputs for wiki absorb, maintenance, and audit.
+Status: implemented as strict wiki retrieval and prompting. Wiki pages, wiki index, and backlinks are the retrieval corpus. Raw documents are retained only as stored evidence and provenance inputs for wiki absorb, maintenance, and audit.
 
 Retrieval policy:
 
 - Retrieve wiki pages for conceptual understanding and factual answers.
-- Retrieve wiki index/backlink/concept-map chunks for fast traversal.
+- Retrieve wiki index/backlink/concept-map content for fast traversal.
 - Prefer current workspace only.
 - Use document filters only when the user explicitly selects documents.
 - Keep raw source references attached to wiki claims for audit.
@@ -639,18 +628,18 @@ Acceptance scenario:
 ```text
 Create workspace
 Upload document A
-Process into raw, wiki, and RAG
+Process into raw, extracted JSON, wiki pages, index, and backlinks
 Start conversation A
 Ask voice question
 Start conversation B
 Ask different chat question
 Upload document B later
 Absorb document B into existing workspace wiki
-Incrementally re-embed changed wiki pages and wiki index/backlink chunks
+Incrementally refresh changed wiki pages and wiki index/backlinks
 LLM document absorb autonomously creates or updates one wiki page
 Re-index edited wiki page automatically
 Ask follow-up question using conversation memory
-Answer uses workspace wiki/RAG and natural voice style
+Answer uses workspace wiki and natural voice style
 ```
 
 Acceptance checklist:
@@ -664,8 +653,8 @@ Acceptance checklist:
 - [x] New document can be added later and absorbed into workspace wiki.
 - [x] LLM autonomously creates and updates wiki pages during document absorb.
 - [x] LLM/deterministic maintenance autonomously merges, lints, and repairs wiki pages outside the document absorb path.
-- [x] Admin/autonomous edit API updates wiki-first RAG.
-- [x] Incremental re-embedding works.
+- [x] Admin/autonomous edit API updates wiki search.
+- [x] Incremental wiki refresh works.
 - [x] Full rebuild from stored raw documents remains available as recovery.
 - [x] All APIs enforce `user_id` and `workspace_id`.
 
@@ -682,8 +671,8 @@ Phase 10 test notes:
 3. Async conversation summarizer.
 4. Regional code-mixed voice prompt style.
 5. Autonomous wiki edit/version API and re-index one page.
-6. Incremental vector deletion/replacement utilities.
+6. Incremental wiki search refresh utilities.
 7. Autonomous workspace wiki absorb pipeline for later document uploads.
 8. Autonomous maintenance logs, validation, quarantine, and rollback UX.
 
-This order improves the user experience quickly, then adds the deeper wiki/RAG mutation system safely.
+This order improves the user experience quickly, then adds the deeper wiki mutation system safely.

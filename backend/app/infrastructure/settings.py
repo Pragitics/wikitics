@@ -1,4 +1,6 @@
 from functools import lru_cache
+from typing import Literal
+
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,15 +17,16 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
 
     database_url: str = "sqlite:///./wikitics.db"
-    redis_url: str = "redis://localhost:6379/0"
 
-    storage_backend: str = "local"
+    storage_backend: Literal["local", "s3"] = "local"
     local_storage_root: str = "./storage"
-    s3_endpoint_url: str = "http://localhost:9000"
+    s3_endpoint_url: str = ""
     s3_bucket: str = "wikitics"
-    s3_access_key_id: str = "wikitics"
-    s3_secret_access_key: str = "wikitics-secret"
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
     s3_region: str = "us-east-1"
+    s3_auto_create_bucket: bool = False
+    s3_force_path_style: bool = True
 
     livekit_url: str = "ws://localhost:7880"
     livekit_api_key: str = "devkey"
@@ -62,10 +65,10 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     openrouter_base_url: AnyHttpUrl = Field(default="https://openrouter.ai/api/v1")
-    openrouter_model: str = "google/gemini-2.5-flash"
+    openrouter_model: str = "openai/gpt-4.1-mini"
     openrouter_title_model: str = "openai/gpt-4o-mini"
     openrouter_summary_model: str = "openai/gpt-4o-mini"
-    openrouter_wiki_model: str = "google/gemini-2.5-flash"
+    openrouter_wiki_model: str = "openai/gpt-4.1-mini"
 
 
 @lru_cache

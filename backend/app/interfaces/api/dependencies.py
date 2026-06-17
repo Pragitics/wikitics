@@ -7,6 +7,7 @@ from app.adapters.llm.openrouter_adapter import OpenRouterLLMAdapter
 from app.adapters.ocr.sarvam_document_intelligence_adapter import SarvamDocumentIntelligenceOCRAdapter
 from app.adapters.parsers.registry import ParserRegistry
 from app.adapters.storage.local_storage_adapter import LocalDocumentStorageAdapter
+from app.adapters.storage.s3_storage_adapter import S3DocumentStorageAdapter
 from app.adapters.voice.livekit_adapter import LiveKitVoiceAdapter
 from app.adapters.speech.sarvam_stt_adapter import SarvamSTTAdapter
 from app.adapters.speech.sarvam_streaming_stt_adapter import SarvamStreamingSTTBridge
@@ -39,6 +40,16 @@ def get_current_user(
 
 
 def storage_dependency(settings: Settings = Depends(settings_dependency)):
+    if settings.storage_backend == "s3":
+        return S3DocumentStorageAdapter(
+            bucket=settings.s3_bucket,
+            endpoint_url=settings.s3_endpoint_url,
+            access_key_id=settings.s3_access_key_id,
+            secret_access_key=settings.s3_secret_access_key,
+            region=settings.s3_region,
+            auto_create_bucket=settings.s3_auto_create_bucket,
+            force_path_style=settings.s3_force_path_style,
+        )
     return LocalDocumentStorageAdapter(settings.local_storage_root)
 
 

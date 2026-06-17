@@ -222,7 +222,7 @@ The backend should follow:
 | Database | PostgreSQL |
 | Vector database | Qdrant |
 | Background jobs | Celery / RQ / Dramatiq |
-| Cache | Redis |
+| Cache | None in current runtime; add only after production measurements justify it |
 | File storage | S3-compatible object storage |
 | LLM provider | OpenRouter |
 | STT | Sarvam |
@@ -240,7 +240,6 @@ The backend should follow:
 | Agent worker | ECS/Fargate / EC2 / Kubernetes |
 | Postgres | RDS PostgreSQL / Supabase / self-managed |
 | Qdrant | Qdrant Cloud / self-hosted |
-| Redis | Elasticache / Upstash / self-hosted |
 | Object storage | AWS S3 |
 
 ---
@@ -284,8 +283,8 @@ The backend should follow:
                    ┌──────────────┼──────────────┐
                    ▼              ▼              ▼
              ┌──────────┐   ┌──────────┐   ┌──────────┐
-             │  Qdrant  │   │ Postgres │   │  Redis   │
-             │ Vectors  │   │ Metadata │   │ Cache    │
+             │  Qdrant  │   │ Postgres │   │   S3     │
+             │ Vectors  │   │ Metadata │   │ Objects  │
              └──────────┘   └──────────┘   └──────────┘
 ```
 
@@ -715,8 +714,7 @@ Infrastructure contains:
 - Database setup.
 - SQLAlchemy models.
 - Qdrant client setup.
-- Redis setup.
-- S3 client.
+- S3-compatible storage client.
 - Celery/RQ workers.
 - Config management.
 
@@ -806,8 +804,6 @@ backend/
         models.py
         migrations/
       qdrant/
-        client.py
-      redis/
         client.py
       settings.py
       logging.py
@@ -1810,7 +1806,6 @@ Docker Compose:
   FastAPI
   Postgres
   Qdrant
-  Redis
   MinIO
   React
   Agent worker
@@ -1849,7 +1844,6 @@ Load balancer
 FastAPI service replicas
 Agent worker replicas
 Managed Postgres
-Managed Redis
 Managed Qdrant or Qdrant cluster
 S3
 LiveKit Cloud or self-hosted LiveKit cluster
@@ -1889,7 +1883,7 @@ OpenRouter for LLM responses
 Postgres + SQLAlchemy for relational data
 Qdrant for fast vector retrieval
 S3 for raw document storage
-Redis for cache and async coordination
+No external cache in current runtime
 ```
 
 The core knowledge flow is:

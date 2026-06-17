@@ -9,6 +9,7 @@ TEST_STORAGE = Path("./test-storage")
 TEST_DB = Path("./test-wikitics.db")
 
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB}"
+os.environ["STORAGE_BACKEND"] = "local"
 os.environ["LOCAL_STORAGE_ROOT"] = str(TEST_STORAGE)
 os.environ["SECRET_KEY"] = "test-secret"
 os.environ["CORS_ORIGINS"] = "http://testserver"

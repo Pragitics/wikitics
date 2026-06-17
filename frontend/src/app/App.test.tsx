@@ -144,6 +144,10 @@ describe("App", () => {
     renderApp();
 
     fireEvent.click(await screen.findByLabelText("Workspace options for Default"));
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
+    fireEvent.click(screen.getByTestId("app-shell"));
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    fireEvent.click(screen.getByLabelText("Workspace options for Default"));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(mockedApi.deleteWorkspace).toHaveBeenCalledWith("token-1", "workspace-1"));
@@ -161,7 +165,7 @@ describe("App", () => {
     });
     mockedApi.processDocument.mockResolvedValue({
       document: { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" },
-      chunk_count: 2
+      wiki_file_count: 3
     });
     renderApp();
 
@@ -173,7 +177,7 @@ describe("App", () => {
     await screen.findByRole("button", { name: "Start voice" });
   });
 
-  it("shows workspace children and active workspace conversations in the sidebar", async () => {
+  it("shows simplified workspace children and active workspace conversations in the sidebar", async () => {
     mockedApi.documents.mockResolvedValue([
       { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" }
     ]);
@@ -191,7 +195,7 @@ describe("App", () => {
     ]);
     renderApp();
 
-    await screen.findByLabelText("Upload documents");
+    await screen.findByLabelText("Workspace documents");
     expect(screen.queryByLabelText("Workspace chat")).toBeNull();
     expect(screen.queryByLabelText("Workspace conversations")).toBeNull();
     expect(screen.getByText("Policy chat")).toBeTruthy();
@@ -211,7 +215,7 @@ describe("App", () => {
   it("adds another document from upload documents navigation", async () => {
     let finishProcessing!: (value: {
       document: { id: string; workspace_id: string; filename: string; file_type: string; status: string };
-      chunk_count: number;
+      wiki_file_count: number;
     }) => void;
     mockedApi.documents.mockResolvedValue([
       { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" }
@@ -231,7 +235,7 @@ describe("App", () => {
     );
     renderApp();
 
-    fireEvent.click(await screen.findByLabelText("Upload documents"));
+    fireEvent.click(await screen.findByLabelText("Workspace documents"));
     const input = (await screen.findByLabelText("Upload document")) as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(["invoice"], "invoice.txt", { type: "text/plain" })] } });
 
@@ -239,7 +243,7 @@ describe("App", () => {
     expect(mockedApi.uploadDocument).toHaveBeenCalledWith("token-1", "workspace-1", expect.any(File));
     finishProcessing({
       document: { id: "doc-2", workspace_id: "workspace-1", filename: "invoice.txt", file_type: "txt", status: "ready" },
-      chunk_count: 3
+      wiki_file_count: 3
     });
     await waitFor(() => expect(mockedApi.processDocument).toHaveBeenCalledWith("token-1", "doc-2"));
   });
@@ -266,12 +270,12 @@ describe("App", () => {
           file_type: "txt",
           status: "ready"
         },
-        chunk_count: 3
+        wiki_file_count: 3
       })
     );
     renderApp();
 
-    fireEvent.click(await screen.findByLabelText("Upload documents"));
+    fireEvent.click(await screen.findByLabelText("Workspace documents"));
     const input = (await screen.findByLabelText("Upload document")) as HTMLInputElement;
     expect(input.multiple).toBe(true);
     fireEvent.change(input, {
@@ -291,7 +295,7 @@ describe("App", () => {
   it("accepts a document drop before the first conversation starts", async () => {
     let finishProcessing!: (value: {
       document: { id: string; workspace_id: string; filename: string; file_type: string; status: string };
-      chunk_count: number;
+      wiki_file_count: number;
     }) => void;
     mockedApi.uploadDocument.mockResolvedValue({
       id: "doc-1",
@@ -317,7 +321,7 @@ describe("App", () => {
     expect(mockedApi.uploadDocument).toHaveBeenCalledWith("token-1", "workspace-1", expect.any(File));
     finishProcessing({
       document: { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" },
-      chunk_count: 2
+      wiki_file_count: 3
     });
     await screen.findByRole("button", { name: "Start voice" });
   });
@@ -327,7 +331,7 @@ describe("App", () => {
       { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" }
     ]);
     mockedApi.ask.mockResolvedValue({
-      answer: "The penalty is 2 percent.",
+      answer: "The penalty is **2 percent**.",
       conversation_id: "conv-1",
       message_id: "msg-1",
       citations: []
@@ -338,7 +342,8 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("Ask"), { target: { value: "Penalty?" } });
     fireEvent.click(screen.getByTitle("Send"));
 
-    await screen.findByText("The penalty is 2 percent.");
+    await screen.findByText("The penalty is");
+    expect(screen.getByText("2 percent").tagName.toLowerCase()).toBe("strong");
     expect(mockedApi.ask).toHaveBeenCalledWith("token-1", "workspace-1", "Penalty?", null);
   });
 

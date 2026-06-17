@@ -38,7 +38,7 @@ Implementation checklist:
 - [x] Read `wikitics_detailed_technical_plan.md`.
 - [x] Create this phase-wise implementation checklist.
 - [x] Add project-level `README.md` with local setup and Docker instructions.
-- [x] Add `.env.example` covering backend, frontend, agent, database, Qdrant, Redis, MinIO, LiveKit, Sarvam, and OpenRouter settings.
+- [x] Add `.env.example` covering backend, frontend, agent, database, MinIO/S3, LiveKit, Sarvam, and OpenRouter settings.
 - [x] Add `.gitignore` for Python, Node, Docker, local storage, build outputs, and secrets.
 
 Testing checklist:
@@ -68,8 +68,6 @@ Planned components:
 - React + Tailwind frontend
 - Agent worker
 - PostgreSQL
-- Redis
-- Qdrant
 - MinIO-compatible object storage
 
 Implementation checklist:
@@ -79,10 +77,8 @@ Implementation checklist:
 - [x] Create frontend Dockerfile.
 - [x] Create agent worker Dockerfile.
 - [x] Add Postgres service.
-- [x] Add Redis service.
-- [x] Add Qdrant service.
-- [x] Add MinIO service.
-- [x] Add backend service wired to Postgres, Redis, Qdrant, and MinIO.
+- [x] Add optional MinIO service for S3-compatible storage testing.
+- [x] Add backend service wired to Postgres, local storage, optional S3-compatible storage, LiveKit, Sarvam, and OpenRouter.
 - [x] Add frontend service wired to backend API URL.
 - [x] Add agent worker service wired to backend, LiveKit, Sarvam, and OpenRouter config.
 - [x] Create backend DDD/hexagonal folder structure:
@@ -641,8 +637,6 @@ Implementation checklist:
 - [x] Add health endpoints:
   - [x] backend
   - [x] database
-  - [x] Redis
-  - [x] Qdrant
   - [x] storage
 - [x] Add metrics placeholders for:
   - [x] upload count
@@ -686,7 +680,7 @@ Phase 8 test notes:
 2026-05-24:
 - Added reusable retry helper tests.
 - Added request-context middleware with request IDs and JSON metric counters/timings.
-- Added `/health/details` for database, Redis, Qdrant, and storage probes.
+- Added `/health/details` for database and storage probes.
 - Added `/metrics/json` counters/timings endpoint.
 - Added source viewer and index rebuild APIs.
 - Backend tests passed: `25 passed`.

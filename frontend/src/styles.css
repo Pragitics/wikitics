@@ -65,7 +65,11 @@ textarea {
 }
 
 .brand-button-collapsed {
-  @apply grid h-10 w-10 place-items-center;
+  @apply grid h-10 w-10 place-items-center rounded-xl text-xl font-bold text-ink transition hover:bg-slate-100;
+}
+
+.brand-text-button {
+  @apply flex min-w-0 items-center text-left text-3xl font-bold text-ink transition hover:text-steel;
 }
 
 .sidebar-collapse-button {
@@ -129,7 +133,7 @@ textarea {
 }
 
 .conversation-menu-trigger {
-  @apply mr-2 grid h-8 w-8 place-items-center rounded-full text-slate-400 opacity-0 transition hover:bg-white hover:text-ink focus:opacity-100 focus-visible:ring-2 focus-visible:ring-slate-200 group-hover:opacity-100;
+  @apply mr-2 grid h-8 w-8 place-items-center rounded-full text-slate-400 transition hover:bg-white hover:text-ink focus-visible:ring-2 focus-visible:ring-slate-200;
 }
 
 .conversation-menu {
@@ -296,15 +300,15 @@ textarea {
 }
 
 .chat-composer {
-  @apply mx-auto flex w-full max-w-5xl items-end gap-3 rounded-[34px] bg-ink px-5 py-4 shadow-sm;
+  @apply mx-auto flex w-full max-w-5xl items-end gap-3 rounded-[34px] border border-slate-200 bg-white px-5 py-4 shadow-sm;
 }
 
 .chat-composer-input {
-  @apply max-h-40 min-h-10 flex-1 resize-none overflow-auto border-0 bg-transparent px-1 py-2 text-base leading-6 text-white outline-none placeholder:text-slate-300;
+  @apply max-h-40 min-h-10 flex-1 resize-none overflow-auto border-0 bg-transparent px-1 py-2 text-base leading-6 text-ink outline-none placeholder:text-slate-400;
 }
 
 .composer-send {
-  @apply grid h-12 w-12 shrink-0 place-items-center rounded-full bg-white text-ink transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45;
+  @apply grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#88BDF2] text-ink transition hover:bg-[#78afe8] disabled:cursor-not-allowed disabled:opacity-45;
 }
 
 .animate-panel {

@@ -2,6 +2,18 @@ from app.domain.retrieval.entities import Citation, SearchResult
 
 
 TECHNICAL_GLOSSARY = "invoice, software, app, website, service, payment, dashboard, login, upload, workspace, document, wiki"
+INFORMAL_REGIONAL_STYLE = (
+    "For Indian regional languages, use casual spoken code-mixed language, not literary or textbook language. "
+    "Prefer the way people actually speak in India: short regional connectors plus English nouns/technical terms. "
+    "For voice replies, prefer romanized/code-mixed phrasing unless the user explicitly asks for native script. "
+    "Avoid newsreader style, formal official wording, and over-translating business/product words. "
+    "Examples of desired style: "
+    "Hinglish: 'Haan, invoice due date 30 days hai.' "
+    "Tanglish: 'Indha document-la payment terms 30 days-nu mention pannirukku.' "
+    "Telugu-English: 'Ee document-lo payment terms 30 days ani mention chesaru.' "
+    "Kannada-English: 'Ee document-alli payment terms 30 days anta mention ide.' "
+    "Malayalam-English: 'Ee document-il payment terms 30 days aanu mention cheythirikkunnathu.'"
+)
 VOICE_STYLE_PREFERENCES = {"auto", "english", "hinglish", "tanglish", "regional_mix"}
 HINGLISH_CUES = {
     "haan",
@@ -112,17 +124,20 @@ def voice_style_instruction(transcript: str, preference: str = "auto") -> str:
     if style == "hinglish":
         return (
             f"{base} Answer in natural Hinglish when the user speaks that way. "
-            f"Use simple Hindi connectors with English business terms. Avoid formal textbook Hindi. {glossary}"
+            f"Use simple Hindi connectors with English business terms. Avoid formal textbook Hindi. "
+            f"{INFORMAL_REGIONAL_STYLE} {glossary}"
         )
     if style == "tanglish":
         return (
             f"{base} Answer in natural Tamil-English/Tanglish when the user speaks that way. "
-            f"Use simple spoken Tamil connectors with English business terms. Avoid formal textbook Tamil. {glossary}"
+            f"Use simple spoken Tamil connectors with English business terms. Avoid formal textbook Tamil. "
+            f"{INFORMAL_REGIONAL_STYLE} {glossary}"
         )
     if style == "regional_mix":
         return (
             f"{base} Match the user's regional language style with natural English mixing. "
-            f"Do not translate common product or business words unnecessarily. {glossary}"
+            f"This applies to Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Odia, and other Indian languages. "
+            f"{INFORMAL_REGIONAL_STYLE} Do not translate common product or business words unnecessarily. {glossary}"
         )
     return f"{base} If the transcript is English, stay in natural English. {glossary}"
 

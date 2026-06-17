@@ -1,5 +1,6 @@
 import { DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowUp,
   FileUp,
   LogOut,
   MessageSquarePlus,
@@ -8,13 +9,10 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
-  Send,
   Trash2
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../services/api";
-import brandMark from "../assets/wikitics-mark.svg";
-import brandWordmark from "../assets/wikitics-wordmark-cropped.png";
 import { useAuthStore } from "../stores/authStore";
 import type { AskResponse, ConversationSummary, DocumentRecord, VoiceSession, VoiceStreamEvent, Workspace } from "../types/api";
 
@@ -1219,6 +1217,10 @@ export default function App() {
       className={`relative grid h-screen overflow-hidden bg-paper text-ink ${
         isSidebarCollapsed ? "lg:grid-cols-[72px_minmax(0,1fr)]" : "lg:grid-cols-[280px_minmax(0,1fr)]"
       }`}
+      onClick={() => {
+        setOpenWorkspaceMenuId(null);
+        setOpenConversationMenuId(null);
+      }}
       onDragEnter={handleDocumentDragEnter}
       onDragOver={handleDocumentDragOver}
       onDragLeave={handleDocumentDragLeave}
@@ -1236,15 +1238,11 @@ export default function App() {
         <div className={isSidebarCollapsed ? "flex h-full flex-col items-center gap-4 p-3" : "flex h-full flex-col gap-7 p-4"}>
           <div className={isSidebarCollapsed ? "grid gap-3" : "flex items-center justify-between gap-2"}>
             <button
-              className={isSidebarCollapsed ? "brand-button-collapsed" : "flex min-w-0 items-center text-left"}
+              className={isSidebarCollapsed ? "brand-button-collapsed" : "brand-text-button"}
               onClick={() => navigate("/dashboard")}
               title="Wikitics"
             >
-              {isSidebarCollapsed ? (
-                <img src={brandMark} alt="" className="h-9 w-9 shrink-0 rounded-xl" />
-              ) : (
-                <img src={brandWordmark} alt="Wikitics" className="h-14 w-auto max-w-[220px] object-contain" />
-              )}
+              <span>{isSidebarCollapsed ? "W" : "Wikitics"}</span>
             </button>
             <button
               type="button"
@@ -1323,14 +1321,14 @@ export default function App() {
                         <button
                           type="button"
                           className={workspaceView === "documents" ? "workspace-child-button-active" : "workspace-child-button"}
-                          aria-label="Upload documents"
+                          aria-label="Workspace documents"
                           onClick={() => {
                             setShowWorkspaceCreator(false);
                             setWorkspaceView("documents");
                           }}
                         >
                           <FileUp size={16} />
-                          <span>Upload documents</span>
+                          <span>Documents</span>
                         </button>
                         <button type="button" className="workspace-child-action" onClick={handleNewConversation}>
                           <MessageSquarePlus size={16} />
@@ -1613,11 +1611,23 @@ function ChatTranscript({ messages }: { messages: ChatMessage[] }) {
     <div ref={transcriptRef} className="chat-transcript scrollbar-soft">
       {messages.map((message) => (
         <div key={message.id} className={message.role === "user" ? "chat-row-user" : "chat-row-agent"}>
-          <div className={message.role === "user" ? "chat-bubble-user" : "chat-bubble-agent"}>{message.content}</div>
+          <div className={message.role === "user" ? "chat-bubble-user" : "chat-bubble-agent"}>
+            {renderMessageContent(message.content)}
+          </div>
         </div>
       ))}
     </div>
   );
+}
+
+function renderMessageContent(content: string) {
+  const parts = content.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    return <span key={index}>{part}</span>;
+  });
 }
 
 function ChatComposer({
@@ -1658,7 +1668,7 @@ function ChatComposer({
         rows={1}
       />
       <button className="composer-send" disabled={busy || !question.trim()} title="Send">
-        <Send size={20} />
+        <ArrowUp size={22} strokeWidth={2.6} />
       </button>
     </form>
   );

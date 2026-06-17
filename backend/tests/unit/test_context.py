@@ -198,6 +198,25 @@ def test_voice_context_uses_tanglish_code_mixed_instruction():
     assert "software" in context
 
 
+def test_voice_context_uses_informal_code_mixed_style_for_indian_languages():
+    result = SearchResult(
+        chunk_id="chunk-1",
+        score=0.9,
+        source_type="wiki",
+        content="Payment terms and invoice workflow details are mentioned.",
+        payload={"path": "wiki/payment.md", "heading": "Payment"},
+    )
+
+    context = build_context_pack("ఈ document lo payment terms enti", [result], mode="voice")
+
+    assert detect_voice_style("ఈ document lo payment terms enti") == "regional_mix"
+    assert "Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Odia" in context
+    assert "casual spoken code-mixed language" in context
+    assert "prefer romanized/code-mixed phrasing" in context
+    assert "Avoid newsreader style" in context
+    assert "Telugu-English" in context
+
+
 def test_voice_context_stays_english_for_english_transcript():
     result = SearchResult(
         chunk_id="chunk-1",

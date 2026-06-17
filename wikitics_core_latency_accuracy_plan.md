@@ -51,7 +51,7 @@
 - Browser mic capture now requests echo cancellation, noise suppression, and auto gain control to reduce false barge-ins from speaker playback.
 - `scripts/benchmark_latency.py` measures text streaming and voice transcript streaming wall time, stage latency, context size, first audio timing, audio bytes, and optional threshold failures.
 - `scripts/benchmark_openrouter_models.py` compares OpenRouter models on retrieved workspace context, measuring first-token latency, total streaming time, concise voice-answer quality, and grounding hits.
-- Default OpenRouter model changed to the measured faster winner, `google/gemini-2.5-flash`, after the model benchmark matched quality and reduced first-token latency versus the previous default.
+- Default OpenRouter model is `openai/gpt-4.1-mini` for chat answers and wiki generation. `google/gemini-2.5-flash` had measured lower first-token latency in the earlier benchmark, but GPT-4.1 mini is preferred for the production workflow because instruction following, wiki editing consistency, and output-token cost matter more for Wikitics.
 - PDF parsing now stores `ocr_required_pages`, `page_text_lengths`, and `ocr_status` metadata so scanned PDFs are visible to the processing pipeline.
 - PDF processing now calls a Sarvam Document Intelligence OCR adapter for scanned/empty-text pages, merges OCR text back into extracted pages, and stores raw OCR output at `extracted/{document_id}/ocr.json`.
 - Document source responses include extracted metadata, so OCR status and stored OCR output paths are visible to API consumers without showing implementation details in the frontend.
@@ -70,7 +70,7 @@
 - Health checks: `http://localhost:8000/health` and `http://localhost:5173` passed.
 - Latency benchmark command passed against the Softrate workspace with thresholds: text stream `2.21s`, voice stream `5.65s`, voice TTS first byte `0.44s`, and no threshold failures.
 - OpenRouter model benchmark passed against the Softrate workspace with three models. `google/gemini-2.5-flash` was recommended with quality score `100`, first token `1.16s`, and total stream `1.34s`; previous default `openai/gpt-4.1-mini` scored `100`, first token `2.04s`, and total stream `2.70s`.
-- After switching the app default to `google/gemini-2.5-flash`, the app latency benchmark passed with thresholds: text stream `1.37s`, voice stream `4.81s`, voice QA LLM response `1.10s`, and voice TTS first byte `0.49s`.
+- Earlier app latency benchmarks passed after switching to `google/gemini-2.5-flash`; re-run the latency benchmark after the `openai/gpt-4.1-mini` default change before setting production SLOs.
 - After switching Sarvam TTS to WebSocket-first streaming and shaping voice answers, the live app benchmark passed with thresholds: text stream `1.46s`, voice stream `5.29s`, voice QA LLM response `1.20s`, voice TTS first byte `0.50s`, TTS stream `4.06s`, and `tts_transport: websocket`.
 - After partial LLM-to-TTS streaming with the threaded producer, the live app benchmark passed with thresholds: text stream `1.69s`, voice stream `3.77s`, voice QA LLM stream `1.13s`, first audio from voice start `1.55s`, voice TTS first byte `0.43s`, TTS stream `2.63s`, and `tts_transport: websocket`.
 - Browser smoke after Phase 13 verified the Docker frontend loads the Softrate workspace, persisted recent conversations render, conversation `...` exposes Delete, the chat surface loads the selected history, and console warnings/errors are clear.

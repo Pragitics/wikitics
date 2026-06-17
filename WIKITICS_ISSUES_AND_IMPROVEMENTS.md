@@ -343,41 +343,7 @@ Wasted: 1800ms, $0.0021 (could be cached)
 
 **Recommended Fix:**
 
-```python
-# Add Redis caching
-import redis
-from functools import wraps
-
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
-
-@cache(ttl=3600, key="embedding:{hash(query)}")
-def embed_with_cache(query):
-    return embeddings.embed(query)
-
-@cache(ttl=1800, key="search:{workspace_id}:{hash(query)}")
-def search_with_cache(workspace_id, query):
-    return vector_search.search(query, filters={"workspace_id": workspace_id})
-
-@cache(ttl=3600, key="wiki_page:{page_id}")
-def get_wiki_page(page_id):
-    return db.query(WikiPageModel).filter_by(id=page_id).first()
-
-# Cache decorator
-def cache(ttl, key):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            cache_key = key.format(**kwargs)
-            cached = redis_client.get(cache_key)
-            if cached:
-                return json.loads(cached)
-            
-            result = func(*args, **kwargs)
-            redis_client.setex(cache_key, ttl, json.dumps(result))
-            return result
-        return wrapper
-    return decorator
-```
+Revisit caching only after measuring the wiki-only workflow in production. The current architecture should avoid an external cache service and keep durable data in Postgres plus object storage.
 
 **Benefits:**
 - ✅ 50% faster for repeated questions
@@ -762,4 +728,3 @@ Respond in JSON format.
     ]
 }
 ```
-

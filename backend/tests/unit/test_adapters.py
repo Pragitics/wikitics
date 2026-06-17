@@ -1,11 +1,16 @@
 import json
 from base64 import b64encode
+from io import BytesIO
 
+import pytest
 import httpx
+from botocore.exceptions import ClientError
 
 from app.adapters.llm.openrouter_adapter import OpenRouterLLMAdapter
 from app.adapters.llm.openrouter_wiki_generator_adapter import OpenRouterWikiGeneratorAdapter
 from app.adapters.llm.openrouter_wiki_maintenance_adapter import OpenRouterWikiMaintenanceAdapter
+from app.adapters.storage import s3_storage_adapter
+from app.adapters.storage.s3_storage_adapter import S3DocumentStorageAdapter
 from app.adapters.speech.sarvam_stt_adapter import SarvamSTTAdapter
 from app.adapters.speech.sarvam_streaming_stt_adapter import (
     SarvamStreamingSTTBridge,
@@ -19,6 +24,38 @@ from app.domain.wiki.entities import WikiPage
 from app.interfaces.api.routes.voice_routes import audio_mime_for_codec
 from app.domain.documents.entities import ExtractedDocument, ExtractedPage
 from app.infrastructure.db.models import WikiPageModel
+
+
+def test_s3_storage_adapter_handles_workspace_objects(monkeypatch):
+    fake_s3 = FakeS3Client()
+    monkeypatch.setattr(s3_storage_adapter.boto3, "client", lambda **kwargs: fake_s3)
+    storage = S3DocumentStorageAdapter(
+        bucket="wikitics",
+        endpoint_url="http://minio:9000",
+        access_key_id="key",
+        secret_access_key="secret",
+        auto_create_bucket=True,
+    )
+
+    assert storage.save_text("wiki/workspace-1/INDEX.md", "# Index") == "wiki/workspace-1/INDEX.md"
+    assert storage.read_text("wiki/workspace-1/INDEX.md") == "# Index"
+    assert storage.exists("wiki/workspace-1/INDEX.md")
+    assert fake_s3.created_buckets == ["wikitics"]
+
+    storage.save_bytes("wiki/workspace-1/pages/page.md", b"# Page")
+    storage.delete("wiki/workspace-1/INDEX.md")
+    assert not storage.exists("wiki/workspace-1/INDEX.md")
+
+    storage.delete_prefix("wiki/workspace-1")
+    assert not storage.exists("wiki/workspace-1/pages/page.md")
+
+
+def test_s3_storage_adapter_rejects_paths_outside_storage(monkeypatch):
+    monkeypatch.setattr(s3_storage_adapter.boto3, "client", lambda **kwargs: FakeS3Client())
+    storage = S3DocumentStorageAdapter(bucket="wikitics")
+
+    with pytest.raises(ValueError):
+        storage.save_text("../outside.md", "no")
 
 
 class FakeClient:
@@ -39,6 +76,44 @@ class FakeClient:
     def stream(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return FakeStreamResponse(self.response)
+
+
+class FakeS3Client:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.bucket_exists = False
+        self.created_buckets: list[str] = []
+
+    def head_bucket(self, Bucket):
+        if not self.bucket_exists:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadBucket")
+
+    def create_bucket(self, **kwargs):
+        self.bucket_exists = True
+        self.created_buckets.append(kwargs["Bucket"])
+
+    def put_object(self, Bucket, Key, Body):
+        self.objects[Key] = Body
+
+    def get_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return {"Body": BytesIO(self.objects[Key])}
+
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+
+    def delete_object(self, Bucket, Key):
+        self.objects.pop(Key, None)
+
+    def list_objects_v2(self, **kwargs):
+        prefix = kwargs["Prefix"]
+        return {"Contents": [{"Key": key} for key in sorted(self.objects) if key.startswith(prefix)]}
+
+    def delete_objects(self, Bucket, Delete):
+        for item in Delete["Objects"]:
+            self.objects.pop(item["Key"], None)
 
 
 class FakeSequentialClient:

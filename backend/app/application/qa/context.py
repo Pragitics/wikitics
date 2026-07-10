@@ -5,14 +5,17 @@ TECHNICAL_GLOSSARY = "invoice, software, app, website, service, payment, dashboa
 INFORMAL_REGIONAL_STYLE = (
     "For Indian regional languages, use casual spoken code-mixed language, not literary or textbook language. "
     "Prefer the way people actually speak in India: short regional connectors plus English nouns/technical terms. "
-    "For voice replies, prefer romanized/code-mixed phrasing unless the user explicitly asks for native script. "
+    "For voice replies, ALWAYS write regional-language words (connectors, verbs, particles, function words) in native script "
+    "so TTS pronunciation is accurate. Do NOT romanize Tamil/Hindi/Telugu/etc. words "
+    "(never write la/laa, pathi, enna, sollu, pannu, irukku, hai, kya, kaise in Latin letters when speaking those languages). "
+    "Keep technical/business product nouns in English Latin script. "
     "Avoid newsreader style, formal official wording, and over-translating business/product words. "
     "Examples of desired style: "
-    "Hinglish: 'Haan, invoice due date 30 days hai.' "
-    "Tanglish: 'Indha document-la payment terms 30 days-nu mention pannirukku.' "
-    "Telugu-English: 'Ee document-lo payment terms 30 days ani mention chesaru.' "
-    "Kannada-English: 'Ee document-alli payment terms 30 days anta mention ide.' "
-    "Malayalam-English: 'Ee document-il payment terms 30 days aanu mention cheythirikkunnathu.'"
+    "Hinglish: 'हाँ, invoice due date 30 days है।' "
+    "Tanglish: 'இந்த document-ல payment terms 30 days-னு mention பண்ணிருக்கு.' "
+    "Telugu-English: 'ఈ document-లో payment terms 30 days అని mention చేశారు.' "
+    "Kannada-English: 'ಈ document-ಲ್ಲಿ payment terms 30 days ಅಂತ mention ಇದೆ.' "
+    "Malayalam-English: 'ഈ document-ിൽ payment terms 30 days ആണ് mention ചെയ്തിരിക്കുന്നത്.'"
 )
 VOICE_STYLE_PREFERENCES = {"auto", "english", "hinglish", "tanglish", "regional_mix"}
 HINGLISH_CUES = {
@@ -124,19 +127,23 @@ def voice_style_instruction(transcript: str, preference: str = "auto") -> str:
     if style == "hinglish":
         return (
             f"{base} Answer in natural Hinglish when the user speaks that way. "
-            f"Use simple Hindi connectors with English business terms. Avoid formal textbook Hindi. "
+            f"Write Hindi connectors/verbs in Devanagari (हाँ, है, क्या, कैसे), keep English business terms in English. "
+            f"Avoid formal textbook Hindi and avoid romanized Hindi (no 'haan'/'hai'/'kya' spellings). "
             f"{INFORMAL_REGIONAL_STYLE} {glossary}"
         )
     if style == "tanglish":
         return (
             f"{base} Answer in natural Tamil-English/Tanglish when the user speaks that way. "
-            f"Use simple spoken Tamil connectors with English business terms. Avoid formal textbook Tamil. "
+            f"Write spoken Tamil words in Tamil script (இந்த, ல, பத்தி, என்ன, சொல்லு, பண்ணு, இருக்கு), "
+            f"keep English business/technical terms in English. "
+            f"Avoid formal textbook Tamil and avoid romanized Tamil (no 'indha'/'la'/'pathi'/'enna'/'pannu' spellings). "
             f"{INFORMAL_REGIONAL_STYLE} {glossary}"
         )
     if style == "regional_mix":
         return (
             f"{base} Match the user's regional language style with natural English mixing. "
             f"This applies to Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Odia, and other Indian languages. "
+            f"Write regional words in that language's native script (not romanized Latin letters). "
             f"{INFORMAL_REGIONAL_STYLE} Do not translate common product or business words unnecessarily. {glossary}"
         )
     return f"{base} If the transcript is English, stay in natural English. {glossary}"

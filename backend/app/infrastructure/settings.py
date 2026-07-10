@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     sarvam_tts_language_code: str = "en-IN"
     sarvam_tts_speaker: str = "shubh"
     sarvam_tts_output_audio_codec: str = "mp3"
-    sarvam_tts_pace: float = 0.95
+    sarvam_tts_pace: float = 1.2
     sarvam_tts_temperature: float = 0.45
     sarvam_tts_ws_url: str = "wss://api.sarvam.ai/text-to-speech/ws"
     sarvam_tts_websocket_enabled: bool = True

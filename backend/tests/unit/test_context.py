@@ -195,6 +195,8 @@ def test_voice_context_uses_tanglish_code_mixed_instruction():
     assert detect_voice_style("indha document la services enna sollu") == "tanglish"
     assert "Tamil-English/Tanglish" in context
     assert "Avoid formal textbook Tamil" in context
+    assert "Tamil script" in context
+    assert "no 'indha'/'la'/'pathi'" in context or "native script" in context
     assert "software" in context
 
 
@@ -212,7 +214,9 @@ def test_voice_context_uses_informal_code_mixed_style_for_indian_languages():
     assert detect_voice_style("ఈ document lo payment terms enti") == "regional_mix"
     assert "Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Odia" in context
     assert "casual spoken code-mixed language" in context
-    assert "prefer romanized/code-mixed phrasing" in context
+    assert "ALWAYS write regional-language words" in context
+    assert "native script" in context
+    assert "Do NOT romanize" in context
     assert "Avoid newsreader style" in context
     assert "Telugu-English" in context
 

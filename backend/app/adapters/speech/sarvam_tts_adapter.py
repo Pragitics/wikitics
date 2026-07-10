@@ -22,7 +22,7 @@ class SarvamTTSAdapter:
         target_language_code: str = "en-IN",
         speaker: str = "shubh",
         output_audio_codec: str = "mp3",
-        pace: float = 0.95,
+        pace: float = 1.2,
         temperature: float = 0.45,
         websocket_url: str | None = None,
         websocket_enabled: bool = True,
@@ -47,6 +47,7 @@ class SarvamTTSAdapter:
         self.websocket_timeout_seconds = websocket_timeout_seconds
         self.last_stream_transport = "none"
         self._websocket: ClientConnection | None = None
+        self._websocket_language_code: str | None = None
         self._websocket_lock = RLock()
 
     def synthesize(self, text: str) -> bytes:
@@ -109,6 +110,7 @@ class SarvamTTSAdapter:
         with self._websocket_lock:
             websocket = self._websocket
             self._websocket = None
+            self._websocket_language_code = None
             if websocket is not None:
                 try:
                     websocket.close()
@@ -118,7 +120,7 @@ class SarvamTTSAdapter:
     def payload(self, text: str) -> dict:
         payload = {
             "text": text[:2500],
-            "target_language_code": self.target_language_code,
+            "target_language_code": resolve_tts_language_code(text, self.target_language_code),
             "model": self.model,
             "speaker": self.speaker,
             "pace": self.pace,
@@ -136,10 +138,10 @@ class SarvamTTSAdapter:
         query["send_completion_event"] = "true"
         return urlunparse(parsed._replace(query=urlencode(query)))
 
-    def websocket_config_message(self) -> dict:
+    def websocket_config_message(self, language_code: str | None = None) -> dict:
         data = {
             "speaker": self.speaker,
-            "target_language_code": self.target_language_code,
+            "target_language_code": language_code or self.target_language_code,
             "pace": self.pace,
             "min_buffer_size": self.websocket_min_buffer_size,
             "max_chunk_length": self.websocket_max_chunk_length,
@@ -157,8 +159,9 @@ class SarvamTTSAdapter:
         return f"{self.url.rstrip('/')}/stream"
 
     def _stream_synthesize_websocket(self, text: str) -> Iterator[bytes]:
+        language_code = resolve_tts_language_code(text, self.target_language_code)
         with self._websocket_lock:
-            websocket = self._ensure_websocket()
+            websocket = self._ensure_websocket(language_code)
             for chunk in text_message_chunks(text):
                 websocket.send(json.dumps({"type": "text", "data": {"text": chunk}}))
             websocket.send(json.dumps({"type": "flush"}))
@@ -177,9 +180,17 @@ class SarvamTTSAdapter:
             if not yielded:
                 raise ValueError("Sarvam WebSocket TTS returned no audio")
 
-    def _ensure_websocket(self) -> ClientConnection:
-        if self._websocket is not None:
+    def _ensure_websocket(self, language_code: str | None = None) -> ClientConnection:
+        resolved_language = language_code or self.target_language_code
+        if self._websocket is not None and self._websocket_language_code == resolved_language:
             return self._websocket
+        if self._websocket is not None:
+            try:
+                self._websocket.close()
+            except WebSocketException:
+                pass
+            self._websocket = None
+            self._websocket_language_code = None
         websocket = websocket_connect(
             self.websocket_connect_url(),
             additional_headers={"api-subscription-key": self.api_key},
@@ -187,9 +198,38 @@ class SarvamTTSAdapter:
             ping_interval=20,
             ping_timeout=10,
         )
-        websocket.send(json.dumps(self.websocket_config_message()))
+        websocket.send(json.dumps(self.websocket_config_message(resolved_language)))
         self._websocket = websocket
+        self._websocket_language_code = resolved_language
         return websocket
+
+
+def resolve_tts_language_code(text: str, fallback: str = "en-IN") -> str:
+    """Pick a Sarvam TTS language code from native-script content for better pronunciation."""
+    counts: dict[str, int] = {}
+    for character in text or "":
+        code = ord(character)
+        if 0x0B80 <= code <= 0x0BFF:
+            counts["ta-IN"] = counts.get("ta-IN", 0) + 1
+        elif 0x0900 <= code <= 0x097F:
+            counts["hi-IN"] = counts.get("hi-IN", 0) + 1
+        elif 0x0C00 <= code <= 0x0C7F:
+            counts["te-IN"] = counts.get("te-IN", 0) + 1
+        elif 0x0C80 <= code <= 0x0CFF:
+            counts["kn-IN"] = counts.get("kn-IN", 0) + 1
+        elif 0x0D00 <= code <= 0x0D7F:
+            counts["ml-IN"] = counts.get("ml-IN", 0) + 1
+        elif 0x0980 <= code <= 0x09FF:
+            counts["bn-IN"] = counts.get("bn-IN", 0) + 1
+        elif 0x0A80 <= code <= 0x0AFF:
+            counts["gu-IN"] = counts.get("gu-IN", 0) + 1
+        elif 0x0B00 <= code <= 0x0B7F:
+            counts["od-IN"] = counts.get("od-IN", 0) + 1
+        elif 0x0A00 <= code <= 0x0A7F:
+            counts["pa-IN"] = counts.get("pa-IN", 0) + 1
+    if not counts:
+        return fallback or "en-IN"
+    return max(counts.items(), key=lambda item: item[1])[0]
 
 
 def decode_audio_response(response: httpx.Response) -> bytes:

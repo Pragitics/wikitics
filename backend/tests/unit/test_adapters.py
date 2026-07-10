@@ -18,7 +18,12 @@ from app.adapters.speech.sarvam_streaming_stt_adapter import (
     normalize_provider_message,
 )
 from app.adapters.speech import sarvam_tts_adapter
-from app.adapters.speech.sarvam_tts_adapter import SarvamTTSAdapter, default_tts_websocket_url, text_message_chunks
+from app.adapters.speech.sarvam_tts_adapter import (
+    SarvamTTSAdapter,
+    default_tts_websocket_url,
+    resolve_tts_language_code,
+    text_message_chunks,
+)
 from app.adapters.voice.livekit_adapter import LiveKitVoiceAdapter
 from app.domain.wiki.entities import WikiPage
 from app.interfaces.api.routes.voice_routes import audio_mime_for_codec
@@ -212,6 +217,27 @@ def test_sarvam_tts_adapter_returns_audio_content(monkeypatch):
     assert fake_client.calls[0][1]["json"]["target_language_code"] == "en-IN"
     assert fake_client.calls[0][1]["json"]["speaker"] == "shubh"
     assert fake_client.calls[0][1]["json"]["output_audio_codec"] == "mp3"
+    assert fake_client.calls[0][1]["json"]["pace"] == 1.2
+
+
+def test_resolve_tts_language_code_from_native_script():
+    assert resolve_tts_language_code("இந்த document-ல payment terms", "en-IN") == "ta-IN"
+    assert resolve_tts_language_code("हाँ invoice due date है", "en-IN") == "hi-IN"
+    assert resolve_tts_language_code("Payment terms are thirty days", "en-IN") == "en-IN"
+
+
+def test_sarvam_tts_adapter_uses_tamil_language_for_tamil_script(monkeypatch):
+    response = httpx.Response(
+        200,
+        json={"audios": [b64encode(b"audio-bytes").decode("ascii")]},
+        request=httpx.Request("POST", "https://example.test/tts"),
+    )
+    fake_client = FakeClient(response)
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: fake_client)
+
+    SarvamTTSAdapter("key", "https://example.test/tts").synthesize("இந்த document-ல payment terms இருக்கு")
+
+    assert fake_client.calls[0][1]["json"]["target_language_code"] == "ta-IN"
 
 
 def test_audio_mime_for_tts_codec():

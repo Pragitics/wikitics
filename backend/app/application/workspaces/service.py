@@ -1,5 +1,8 @@
+import logging
+
 from fastapi import HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import inspect, or_, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.application.workspaces.access import ensure_workspace_member
@@ -20,7 +23,10 @@ from app.infrastructure.db.models import (
     WorkspaceModel,
 )
 from app.shared.ids import new_id
+from app.shared.user_errors import WORKSPACE_DELETE_FAILED
 
+
+logger = logging.getLogger(__name__)
 
 VOICE_STYLE_PREFERENCES = {"auto", "english", "hinglish", "tanglish", "regional_mix"}
 
@@ -112,7 +118,10 @@ class WorkspaceService:
         if citation_filters:
             self.db.query(CitationModel).filter(or_(*citation_filters)).delete(synchronize_session=False)
 
-        self.db.query(VoiceSessionModel).filter(VoiceSessionModel.workspace_id == workspace_id).delete(synchronize_session=False)
+        voice_session_filters = [VoiceSessionModel.workspace_id == workspace_id]
+        if conversation_ids:
+            voice_session_filters.append(VoiceSessionModel.conversation_id.in_(conversation_ids))
+        self.db.query(VoiceSessionModel).filter(or_(*voice_session_filters)).delete(synchronize_session=False)
         if conversation_ids:
             self.db.query(MessageModel).filter(MessageModel.conversation_id.in_(conversation_ids)).delete(synchronize_session=False)
         self.db.query(ConversationModel).filter(ConversationModel.workspace_id == workspace_id).delete(synchronize_session=False)
@@ -120,6 +129,7 @@ class WorkspaceService:
         self.db.query(WikiAbsorbLogModel).filter(WikiAbsorbLogModel.workspace_id == workspace_id).delete(synchronize_session=False)
         self.db.query(WikiRevisionModel).filter(WikiRevisionModel.workspace_id == workspace_id).delete(synchronize_session=False)
         self.db.query(WikiMaintenanceLogModel).filter(WikiMaintenanceLogModel.workspace_id == workspace_id).delete(synchronize_session=False)
+        self._delete_legacy_chunks(workspace_id)
         self.db.query(WikiPageModel).filter(WikiPageModel.workspace_id == workspace_id).delete(synchronize_session=False)
         if document_ids:
             self.db.query(ExtractedDocumentModel).filter(ExtractedDocumentModel.document_id.in_(document_ids)).delete(
@@ -133,10 +143,40 @@ class WorkspaceService:
             synchronize_session=False
         )
         self.db.delete(workspace)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except SQLAlchemyError as exc:
+            # Leaving the session dirty would break every later request on this
+            # connection, and an unhandled error escapes without CORS headers, which
+            # the browser reports as a dropped connection rather than a real message.
+            self.db.rollback()
+            logger.exception("Workspace delete failed: workspace_id=%s", workspace_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=WORKSPACE_DELETE_FAILED,
+            ) from exc
 
         self._delete_storage_prefixes([f"wiki/{workspace_id}", *raw_prefixes, *extracted_prefixes])
         return {"deleted": True, "workspace_id": workspace_id}
+
+    def _delete_legacy_chunks(self, workspace_id: str) -> None:
+        """Clear rows in the legacy `chunks` table for this workspace.
+
+        `chunks` predates the wiki-first retrieval layer and has no ORM model any
+        more, but its foreign keys onto wiki_pages and documents are still enforced,
+        so leftover rows block a workspace delete. Databases created from the current
+        models have no such table, hence the existence check.
+        """
+        inspector = inspect(self.db.get_bind())
+        if not inspector.has_table("chunks"):
+            return
+        # citations.chunk_id is legacy too, and can be absent even where chunks exists.
+        if any(column["name"] == "chunk_id" for column in inspector.get_columns("citations")):
+            self.db.execute(
+                text("DELETE FROM citations WHERE chunk_id IN (SELECT id FROM chunks WHERE workspace_id = :workspace_id)"),
+                {"workspace_id": workspace_id},
+            )
+        self.db.execute(text("DELETE FROM chunks WHERE workspace_id = :workspace_id"), {"workspace_id": workspace_id})
 
     def _delete_storage_prefixes(self, prefixes: list[str]) -> None:
         if self.storage is None:

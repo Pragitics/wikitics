@@ -8,7 +8,15 @@ export default {
         steel: "#64748b",
         mint: "#384959",
         amberline: "#88BDF2",
-        paper: "#ffffff"
+        accent: "#88BDF2",
+        paper: "#ffffff",
+        canvas: "#F5F7F9",
+        hairline: "#E5E9EF",
+        wash: "#EDF1F6"
+      },
+      fontFamily: {
+        sans: ['"Geist Variable"', "ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
+        display: ['"Instrument Serif"', "ui-serif", "Georgia", "serif"]
       }
     }
   },

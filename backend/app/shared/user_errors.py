@@ -1,5 +1,7 @@
 AI_SERVICE_UNAVAILABLE = "AI service is currently unavailable. Please try again."
 DOCUMENT_PROCESSING_FAILED = "Document processing failed. Please try again."
 DOCUMENT_PROCESSING_UNAVAILABLE = "Document processing is currently unavailable. Please try again."
+DOCUMENT_NO_READABLE_TEXT = "We could not read any text in this document. If it is a scan, try a clearer copy."
 SPEECH_RECOGNITION_UNAVAILABLE = "Speech recognition is currently unavailable. Please try again."
 VOICE_PLAYBACK_UNAVAILABLE = "Voice playback is currently unavailable. Please try again."
+WORKSPACE_DELETE_FAILED = "We could not delete that workspace. Please try again."

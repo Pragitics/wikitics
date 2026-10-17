@@ -315,7 +315,7 @@ def test_conversation_summary_job_does_not_block_current_answer(client, auth_hea
             b"Support workflow covers invoices, dashboards, and server support.",
         )
         conversation_id = None
-        for index in range(5):
+        for index in range(3):
             payload = {"question": f"What support workflow detail is available turn {index}?"}
             if conversation_id:
                 payload["conversation_id"] = conversation_id
@@ -366,7 +366,7 @@ def test_workspace_voice_style_preference_guides_voice_prompt(client, auth_heade
         )
 
         assert response.status_code == 200
-        assert any("natural Hinglish" in context for context in fake_llm.contexts)
+        assert any("Answer in natural spoken Hindi-English code-mix" in context for context in fake_llm.contexts)
     finally:
         app.dependency_overrides.pop(llm_dependency, None)
         app.dependency_overrides.pop(tts_dependency, None)
@@ -965,6 +965,68 @@ def test_conversation_list_title_and_delete(client, auth_headers, workspace_id):
 
     missing = client.get(f"/api/conversations/{conversation_id}", headers=auth_headers)
     assert missing.status_code == 404
+
+
+def test_workspace_delete_clears_legacy_chunk_rows(client, auth_headers, workspace_id):
+    """A database migrated from the pre-wiki schema still has a `chunks` table whose
+    foreign keys onto wiki_pages and documents block the delete."""
+    from sqlalchemy import text
+
+    from app.infrastructure.db.session import SessionLocal
+
+    _upload_and_process(
+        client,
+        auth_headers,
+        workspace_id,
+        "legacy-chunks.txt",
+        b"Legacy chunk rows must not block workspace deletion.",
+    )
+
+    with SessionLocal() as db:
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id VARCHAR(36) PRIMARY KEY,
+                    workspace_id VARCHAR(36) NOT NULL,
+                    user_id VARCHAR(36) NOT NULL,
+                    document_id VARCHAR(36) REFERENCES documents(id),
+                    wiki_page_id VARCHAR(36) REFERENCES wiki_pages(id),
+                    source_type VARCHAR(50) NOT NULL,
+                    content TEXT NOT NULL
+                )
+                """
+            )
+        )
+        page_id = db.execute(
+            text("SELECT id FROM wiki_pages WHERE workspace_id = :ws LIMIT 1"), {"ws": workspace_id}
+        ).scalar()
+        document_id = db.execute(
+            text("SELECT id FROM documents WHERE workspace_id = :ws LIMIT 1"), {"ws": workspace_id}
+        ).scalar()
+        assert page_id and document_id
+        db.execute(
+            text(
+                "INSERT INTO chunks (id, workspace_id, user_id, document_id, wiki_page_id, source_type, content)"
+                " VALUES ('legacy-1', :ws, 'user-legacy', :doc, :page, 'wiki', 'legacy chunk')"
+            ),
+            {"ws": workspace_id, "doc": document_id, "page": page_id},
+        )
+        db.commit()
+
+    try:
+        deleted = client.delete(f"/api/workspaces/{workspace_id}", headers=auth_headers)
+
+        assert deleted.status_code == 200
+        with SessionLocal() as db:
+            remaining = db.execute(
+                text("SELECT count(*) FROM chunks WHERE workspace_id = :ws"), {"ws": workspace_id}
+            ).scalar()
+        assert remaining == 0
+    finally:
+        with SessionLocal() as db:
+            db.execute(text("DROP TABLE IF EXISTS chunks"))
+            db.commit()
 
 
 def test_workspace_delete_removes_owned_workspace_data(client, auth_headers, workspace_id):

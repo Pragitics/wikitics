@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
-from app.application.qa.context import build_context_pack, citations_from_results, detect_voice_style
+from app.application.qa.context import build_context_pack, citations_from_results
 from app.application.qa.service import (
+    QAService,
     combine_conversation_memory,
     conversation_needs_summary,
     format_conversation_context,
     messages_since_cursor,
     retrieval_query_with_memory,
-    shape_voice_answer,
 )
 from app.domain.retrieval.entities import SearchResult
 
@@ -123,12 +123,12 @@ def test_text_context_allows_detailed_answers_when_needed():
 
     context = build_context_pack("Explain the workflow in detail", [result], mode="text")
 
-    assert "do not use a fixed word cap" in context.lower()
-    assert "Do not force every answer into one line." in context
+    assert "There is no word cap in any mode." in context
+    assert "Do not force every answer into one line" in context
     assert "Keep it under 80 words" not in context
 
 
-def test_conversation_context_is_bounded_and_used_for_retrieval_query():
+def test_conversation_context_is_bounded_for_the_prompt():
     messages = [
         SimpleNamespace(role="user", content="Which services are mentioned in the document?"),
         SimpleNamespace(role="assistant", content="It mentions app development and server support."),
@@ -136,12 +136,31 @@ def test_conversation_context_is_bounded_and_used_for_retrieval_query():
     ]
 
     memory = format_conversation_context(messages, 90)
-    retrieval_query = retrieval_query_with_memory("What about the second one?", memory)
 
     assert "User: Which services are mentioned" in memory
     assert "tool" not in memory
     assert len(memory) <= 90
+
+
+def test_retrieval_query_uses_the_model_written_summary_not_the_raw_transcript():
+    transcript = format_conversation_context(
+        [
+            SimpleNamespace(role="user", content="Which services are mentioned in the document?"),
+            SimpleNamespace(role="assistant", content="It mentions app development and server support."),
+        ],
+        500,
+    )
+
+    assert retrieval_query_with_memory("What about the second one?", "") == "What about the second one?"
+
+    retrieval_query = retrieval_query_with_memory(
+        "What about the second one?",
+        "User is comparing service options; the second one means server support.",
+    )
+
     assert "Current question: What about the second one?" in retrieval_query
+    assert "second one means server support" in retrieval_query
+    assert transcript not in retrieval_query
 
 
 def test_conversation_summary_trigger_uses_message_count_cursor_and_character_thresholds():
@@ -164,7 +183,7 @@ def test_conversation_summary_trigger_uses_message_count_cursor_and_character_th
     assert conversation_needs_summary(SimpleNamespace(memory_message_cursor="msg-10"), long_messages)
 
 
-def test_voice_context_uses_hinglish_code_mixed_instruction():
+def test_voice_context_lets_the_model_pick_the_language_when_preference_is_auto():
     result = SearchResult(
         chunk_id="chunk-1",
         score=0.9,
@@ -175,13 +194,14 @@ def test_voice_context_uses_hinglish_code_mixed_instruction():
 
     context = build_context_pack("haan invoice ka summary batao", [result], mode="voice")
 
-    assert detect_voice_style("haan invoice ka summary batao") == "hinglish"
-    assert "natural Hinglish" in context
+    assert "Decide the reply language yourself" in context
+    assert "same language, script, and code-mixing pattern" in context
+    assert "has set their reply language" not in context
     assert "Keep common technical/business terms in English" in context
-    assert "invoice" in context
+    assert "native script" in context
 
 
-def test_voice_context_uses_tanglish_code_mixed_instruction():
+def test_voice_context_applies_an_explicit_workspace_style_preference():
     result = SearchResult(
         chunk_id="chunk-1",
         score=0.9,
@@ -190,38 +210,17 @@ def test_voice_context_uses_tanglish_code_mixed_instruction():
         payload={"path": "wiki/services.md", "heading": "Services"},
     )
 
-    context = build_context_pack("indha document la services enna sollu", [result], mode="voice")
+    tanglish = build_context_pack("what services", [result], mode="voice", voice_style_preference="tanglish")
+    hinglish = build_context_pack("what services", [result], mode="voice", voice_style_preference="hinglish")
+    regional = build_context_pack("what services", [result], mode="voice", voice_style_preference="regional_mix")
 
-    assert detect_voice_style("indha document la services enna sollu") == "tanglish"
-    assert "Tamil-English/Tanglish" in context
-    assert "Avoid formal textbook Tamil" in context
-    assert "Tamil script" in context
-    assert "no 'indha'/'la'/'pathi'" in context or "native script" in context
-    assert "software" in context
-
-
-def test_voice_context_uses_informal_code_mixed_style_for_indian_languages():
-    result = SearchResult(
-        chunk_id="chunk-1",
-        score=0.9,
-        source_type="wiki",
-        content="Payment terms and invoice workflow details are mentioned.",
-        payload={"path": "wiki/payment.md", "heading": "Payment"},
-    )
-
-    context = build_context_pack("ఈ document lo payment terms enti", [result], mode="voice")
-
-    assert detect_voice_style("ఈ document lo payment terms enti") == "regional_mix"
-    assert "Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Odia" in context
-    assert "casual spoken code-mixed language" in context
-    assert "ALWAYS write regional-language words" in context
-    assert "native script" in context
-    assert "Do NOT romanize" in context
-    assert "Avoid newsreader style" in context
-    assert "Telugu-English" in context
+    assert "Tamil script" in tanglish
+    assert "Devanagari" in hinglish
+    assert "Telugu, Kannada, Malayalam" in regional
+    assert "Decide the reply language yourself" not in tanglish
 
 
-def test_voice_context_stays_english_for_english_transcript():
+def test_voice_context_asks_for_brevity_without_imposing_a_length_cap():
     result = SearchResult(
         chunk_id="chunk-1",
         score=0.9,
@@ -232,13 +231,14 @@ def test_voice_context_stays_english_for_english_transcript():
 
     context = build_context_pack("What support is mentioned?", [result], mode="voice")
 
-    assert detect_voice_style("What support is mentioned?") == "english"
-    assert "stay in natural English" in context
-    assert "natural Hinglish" not in context
-
-
-def test_voice_style_preference_overrides_auto_detection():
-    assert detect_voice_style("What support is mentioned?", "tanglish") == "tanglish"
+    # Brevity is asked of the model, never enforced by truncating its answer.
+    assert "be brief and get to the point" in context
+    assert "one or two short spoken sentences" in context
+    assert "do not add a closing recap" in context.lower()
+    assert "never trail off mid-thought" in context
+    assert "There is no word cap in any mode." in context
+    assert "prefer under" not in context
+    assert "32 words" not in context
 
 
 def test_context_pack_handles_insufficient_context():
@@ -286,26 +286,59 @@ def test_citations_are_deduplicated_to_wiki_provenance():
     assert citations[0].filename == "policy.txt"
 
 
-def test_voice_answer_is_shaped_for_spoken_latency():
-    answer = (
-        "The document mentions software services for application development, UI/UX design, server support, "
-        "and long-term maintenance. It also references related business workflow support that may be discussed later."
-    )
+def test_conversation_maintenance_coalesces_bursts_on_the_same_conversation():
+    from threading import Event
 
-    shaped = shape_voice_answer(answer, "In one short spoken sentence, what services are mentioned?")
+    from app.application.qa import service as qa_service
 
-    assert shaped == "The document mentions software services for application development, UI/UX design, server support, and long-term maintenance."
+    started = Event()
+    release = Event()
+    started_ids = []
+
+    class StubLLM:
+        api_key = "test-key"
+
+        def title(self, messages):
+            return ""
+
+        def summarize_conversation(self, existing_summary, messages):
+            return ""
+
+    class CoalescingService(QAService):
+        def __init__(self) -> None:
+            self.llm = StubLLM()
+
+        def _run_conversation_maintenance(self, conversation_id: str) -> None:
+            started_ids.append(conversation_id)
+            started.set()
+            release.wait(2)
+            self._release_maintenance(conversation_id)
+
+    service = CoalescingService()
+    try:
+        service._schedule_conversation_maintenance("conv-1")
+        assert started.wait(2)
+        for _ in range(5):
+            service._schedule_conversation_maintenance("conv-1")
+        service._schedule_conversation_maintenance("conv-2")
+    finally:
+        release.set()
+
+    qa_service._background_executor.submit(lambda: None).result(timeout=5)
+
+    assert started_ids.count("conv-1") == 1
+    assert "conv-2" in started_ids
+    assert not qa_service._maintenance_inflight
 
 
-def test_voice_answer_allows_detailed_sentences_for_learning_intent():
-    answer = (
-        "The service model is about helping clients plan and build software. "
-        "It connects design, development, server work, and maintenance so the client has one coordinated delivery path. "
-        "The workflow usually starts with understanding requirements and then moves into design and implementation. "
-        "After delivery, support and maintenance keep the system reliable."
-    )
+def test_conversation_maintenance_is_skipped_without_an_llm_key():
+    class KeylessLLM:
+        api_key = ""
 
-    shaped = shape_voice_answer(answer, "Can you explain how this works?")
+        def title(self, messages):
+            raise AssertionError("should not run")
 
-    assert shaped.count(".") == 4
-    assert "support and maintenance" in shaped
+    service = QAService.__new__(QAService)
+    service.llm = KeylessLLM()
+
+    service._schedule_conversation_maintenance("conv-3")

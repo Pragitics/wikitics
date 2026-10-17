@@ -26,6 +26,7 @@ vi.mock("../stores/authStore", () => ({
 }));
 
 vi.mock("../services/api", () => ({
+  CONNECTION_INTERRUPTED_MESSAGE: "Connection interrupted. Refresh and try again.",
   api: {
     register: vi.fn(),
     login: vi.fn(),
@@ -248,6 +249,34 @@ describe("App", () => {
     await waitFor(() => expect(mockedApi.processDocument).toHaveBeenCalledWith("token-1", "doc-2"));
   });
 
+  it("offers an inline retry when document processing fails, with no alert", async () => {
+    mockedApi.uploadDocument.mockResolvedValue({
+      id: "doc-1",
+      workspace_id: "workspace-1",
+      filename: "policy.txt",
+      file_type: "txt",
+      status: "uploaded"
+    });
+    mockedApi.processDocument.mockRejectedValueOnce(new Error("Document processing failed. Please try again."));
+    mockedApi.processDocument.mockResolvedValueOnce({
+      document: { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" },
+      wiki_file_count: 3
+    });
+    renderApp();
+
+    const input = screen.getByLabelText("Upload document") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["policy"], "policy.txt", { type: "text/plain" })] } });
+
+    await screen.findByText("We could not prepare policy.txt.");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/Document processing failed/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await screen.findByRole("button", { name: "Start voice" });
+    expect(mockedApi.processDocument).toHaveBeenCalledTimes(2);
+  });
+
   it("uploads multiple documents from upload documents navigation up to the workspace limit", async () => {
     mockedApi.documents.mockResolvedValue([
       { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" }
@@ -345,6 +374,34 @@ describe("App", () => {
     await screen.findByText("The penalty is");
     expect(screen.getByText("2 percent").tagName.toLowerCase()).toBe("strong");
     expect(mockedApi.ask).toHaveBeenCalledWith("token-1", "workspace-1", "Penalty?", null);
+  });
+
+  it("shows a failed answer inline with a retry instead of an alert", async () => {
+    mockedApi.documents.mockResolvedValue([
+      { id: "doc-1", workspace_id: "workspace-1", filename: "policy.txt", file_type: "txt", status: "ready" }
+    ]);
+    mockedApi.ask.mockRejectedValueOnce(new Error("AI service is currently unavailable. Please try again."));
+    mockedApi.ask.mockResolvedValueOnce({
+      answer: "The penalty is 2 percent.",
+      conversation_id: "conv-1",
+      message_id: "msg-1",
+      citations: []
+    });
+    renderApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Chat" }));
+    fireEvent.change(screen.getByLabelText("Ask"), { target: { value: "Penalty?" } });
+    fireEvent.click(screen.getByTitle("Send"));
+
+    await screen.findByText("That answer did not come through. Give it another go.");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/AI service is currently unavailable/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await screen.findByText("The penalty is 2 percent.");
+    expect(screen.queryByText("That answer did not come through. Give it another go.")).toBeNull();
+    expect(mockedApi.ask).toHaveBeenCalledTimes(2);
   });
 
   it("loads stored conversation history", async () => {

@@ -18,39 +18,26 @@ INFORMAL_REGIONAL_STYLE = (
     "Malayalam-English: 'ഈ document-ിൽ payment terms 30 days ആണ് mention ചെയ്തിരിക്കുന്നത്.'"
 )
 VOICE_STYLE_PREFERENCES = {"auto", "english", "hinglish", "tanglish", "regional_mix"}
-HINGLISH_CUES = {
-    "haan",
-    "hai",
-    "kya",
-    "kaise",
-    "kyu",
-    "bata",
-    "batao",
-    "mujhe",
-    "mera",
-    "mere",
-    "mein",
-    "mai",
-    "nahi",
-    "aur",
-    "kar",
-    "karo",
-    "wala",
-}
-TANGLISH_CUES = {
-    "aama",
-    "enna",
-    "epdi",
-    "eppadi",
-    "sollu",
-    "sollunga",
-    "pannu",
-    "pannunga",
-    "irukku",
-    "illa",
-    "indha",
-    "intha",
-    "la",
+LANGUAGE_MIRROR_INSTRUCTION = (
+    "Decide the reply language yourself by reading the user's own words. "
+    "Answer in the same language, script, and code-mixing pattern the user just used, "
+    "and stay in it for the whole answer. Never switch language on your own."
+)
+VOICE_STYLE_DIRECTIVES = {
+    "english": "The user has set their reply language to English. Answer in natural English.",
+    "hinglish": (
+        "The user has set their reply language to Hinglish. Answer in natural spoken Hindi-English code-mix, "
+        "with the Hindi words written in Devanagari."
+    ),
+    "tanglish": (
+        "The user has set their reply language to Tanglish. Answer in natural spoken Tamil-English code-mix, "
+        "with the Tamil words written in Tamil script."
+    ),
+    "regional_mix": (
+        "The user has set their reply language to their regional language mixed with English. "
+        "Use whichever Indian language they are speaking - Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, "
+        "Punjabi, Odia, Hindi, Tamil - and write its words in that language's own native script."
+    ),
 }
 
 
@@ -89,7 +76,7 @@ def build_context_pack(
     else:
         lines.append("No linked source documents available.")
     style_instruction = (
-        voice_style_instruction(question, voice_style_preference)
+        voice_style_instruction(voice_style_preference)
         if mode == "voice"
         else (
             "- Text mode: answer with the amount of detail the question needs. "
@@ -102,10 +89,10 @@ def build_context_pack(
             "Instructions:",
             "- Answer clearly.",
             "- Use the workspace wiki as the operating knowledge base; source evidence is for provenance and audit.",
-            "- Adapt answer length to intent: simple factual questions can be brief; explain/how/why/compare/process/detail questions should be detailed.",
-            "- Do not force every answer into one line. When useful, include enough context, reasoning, and structure for the user to understand.",
-            f"- For voice, prefer under {profile['word_limit']} words unless the user asks for detail or explanation.",
-            "- For text, do not use a fixed word cap; be complete but avoid filler.",
+            "- Judge the right answer length from the question yourself. There is no word cap in any mode.",
+            "- Do not force every answer into one line, and never stop mid-thought or trail off before the point is made.",
+            "- Simple factual questions can be brief; explain/how/why/compare/process/detail questions should be complete.",
+            "- Be complete but avoid filler.",
             "- Summarize broad topics clearly, and include important details when they affect the answer.",
             style_instruction,
             "- Use conversation context only to resolve references; uploaded document and wiki context remain the source of truth.",
@@ -117,71 +104,24 @@ def build_context_pack(
     return "\n".join(lines)
 
 
-def voice_style_instruction(transcript: str, preference: str = "auto") -> str:
-    style = detect_voice_style(transcript, preference)
+def voice_style_instruction(preference: str = "auto") -> str:
+    """Voice style guidance for the model. The model picks the language; a workspace preference only overrides it."""
     base = (
-        "- Voice mode: speak like a real-time assistant. Keep simple answers brief, but give a fuller explanation "
-        "when the user asks to explain, compare, understand, or walk through something."
+        "- Voice mode: your answer is spoken aloud in a live conversation, so be brief and get to the point. "
+        "Lead with the direct answer in the first sentence. Default to one or two short spoken sentences; "
+        "a plain factual question needs nothing more. Only go longer when the user actually asks you to explain, "
+        "compare, or walk through something - and even then stay conversational and stop once the point is made. "
+        "Do not restate the question, do not summarize what you just said, and do not add a closing recap. "
+        "Whatever length you choose, finish your sentence - never trail off mid-thought."
     )
     glossary = f"Keep common technical/business terms in English: {TECHNICAL_GLOSSARY}."
-    if style == "hinglish":
-        return (
-            f"{base} Answer in natural Hinglish when the user speaks that way. "
-            f"Write Hindi connectors/verbs in Devanagari (हाँ, है, क्या, कैसे), keep English business terms in English. "
-            f"Avoid formal textbook Hindi and avoid romanized Hindi (no 'haan'/'hai'/'kya' spellings). "
-            f"{INFORMAL_REGIONAL_STYLE} {glossary}"
-        )
-    if style == "tanglish":
-        return (
-            f"{base} Answer in natural Tamil-English/Tanglish when the user speaks that way. "
-            f"Write spoken Tamil words in Tamil script (இந்த, ல, பத்தி, என்ன, சொல்லு, பண்ணு, இருக்கு), "
-            f"keep English business/technical terms in English. "
-            f"Avoid formal textbook Tamil and avoid romanized Tamil (no 'indha'/'la'/'pathi'/'enna'/'pannu' spellings). "
-            f"{INFORMAL_REGIONAL_STYLE} {glossary}"
-        )
-    if style == "regional_mix":
-        return (
-            f"{base} Match the user's regional language style with natural English mixing. "
-            f"This applies to Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Odia, and other Indian languages. "
-            f"Write regional words in that language's native script (not romanized Latin letters). "
-            f"{INFORMAL_REGIONAL_STYLE} Do not translate common product or business words unnecessarily. {glossary}"
-        )
-    return f"{base} If the transcript is English, stay in natural English. {glossary}"
+    directive = VOICE_STYLE_DIRECTIVES.get(normalize_voice_style_preference(preference), LANGUAGE_MIRROR_INSTRUCTION)
+    return f"{base} {directive} {INFORMAL_REGIONAL_STYLE} {glossary}"
 
 
-def detect_voice_style(transcript: str, preference: str = "auto") -> str:
-    normalized_preference = (preference or "auto").strip().lower().replace("-", "_")
-    if normalized_preference in VOICE_STYLE_PREFERENCES and normalized_preference != "auto":
-        return normalized_preference
-
-    text = " ".join(str(transcript or "").lower().split())
-    words = set(text.replace(",", " ").replace(".", " ").replace("?", " ").replace("!", " ").split())
-    if has_script(text, 0x0B80, 0x0BFF) or len(words.intersection(TANGLISH_CUES)) >= 2:
-        return "tanglish"
-    if has_script(text, 0x0900, 0x097F) or len(words.intersection(HINGLISH_CUES)) >= 2:
-        return "hinglish"
-    if has_any_indic_script(text):
-        return "regional_mix"
-    return "english"
-
-
-def has_any_indic_script(text: str) -> bool:
-    ranges = [
-        (0x0900, 0x097F),
-        (0x0980, 0x09FF),
-        (0x0A00, 0x0A7F),
-        (0x0A80, 0x0AFF),
-        (0x0B00, 0x0B7F),
-        (0x0B80, 0x0BFF),
-        (0x0C00, 0x0C7F),
-        (0x0C80, 0x0CFF),
-        (0x0D00, 0x0D7F),
-    ]
-    return any(has_script(text, start, end) for start, end in ranges)
-
-
-def has_script(text: str, start: int, end: int) -> bool:
-    return any(start <= ord(character) <= end for character in text)
+def normalize_voice_style_preference(preference: str) -> str:
+    normalized = (preference or "auto").strip().lower().replace("-", "_")
+    return normalized if normalized in VOICE_STYLE_PREFERENCES else "auto"
 
 
 def context_profile(mode: str) -> dict:
@@ -190,16 +130,14 @@ def context_profile(mode: str) -> dict:
             "wiki_limit": 3,
             "source_document_limit": 4,
             "chars_per_section": 700,
-            "word_limit": 32,
             "max_results": 6,
-            "history_message_limit": 4,
-            "history_char_limit": 1500,
+            "history_message_limit": 10,
+            "history_char_limit": 3000,
         }
     return {
         "wiki_limit": 5,
         "source_document_limit": 8,
         "chars_per_section": 1000,
-        "word_limit": 80,
         "max_results": 10,
         "history_message_limit": 10,
         "history_char_limit": 4500,

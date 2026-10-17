@@ -215,6 +215,9 @@ docker-data/
 .env.*
 !.env.example
 
+# Vercel project metadata
+.vercel/
+
 # Test and build artifacts
 junit.xml
 playwright-report/

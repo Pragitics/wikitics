@@ -108,6 +108,12 @@ services:
       VITE_API_BASE_URL: http://localhost:8000
     ports:
       - "5173:5173"
+    volumes:
+      # Live source so vite hot-reloads edits instead of needing an image rebuild.
+      # The anonymous volume keeps the container's Linux node_modules, which would
+      # otherwise be shadowed by the host's macOS build.
+      - ./frontend:/app
+      - /app/node_modules
     depends_on:
       - backend
 

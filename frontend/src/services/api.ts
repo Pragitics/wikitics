@@ -22,16 +22,28 @@ const VOICE_UNAVAILABLE_MESSAGE = "Voice service is currently unavailable. Pleas
 
 type RequestOptions = RequestInit & { token?: string | null };
 
+export const CONNECTION_INTERRUPTED_MESSAGE = "Connection interrupted. Refresh and try again.";
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 async function fetchWithRetry(input: string, init: RequestInit, retries = 1): Promise<Response> {
   let attempt = 0;
   while (true) {
     try {
       return await fetch(input, init);
     } catch (error) {
+      // An abort is a deliberate caller action (stopping the mic, barging in), not a
+      // failure: retrying it is pointless and wrapping it in a plain Error would hide
+      // the AbortError the caller checks for, turning a normal stop into an error.
+      if (isAbortError(error)) {
+        throw error;
+      }
       if (attempt >= retries) {
         const message =
           error instanceof Error && error.message === "Failed to fetch"
-            ? "Connection interrupted. Refresh and try again."
+            ? CONNECTION_INTERRUPTED_MESSAGE
             : error instanceof Error
               ? error.message
               : "Network request failed";

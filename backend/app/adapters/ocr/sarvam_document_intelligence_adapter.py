@@ -108,7 +108,7 @@ class SarvamDocumentIntelligenceOCRAdapter:
         upload_url, headers = upload_url_and_headers(upload_entry)
         if not upload_url:
             raise ValueError("Sarvam upload URL missing")
-        response = client.put(upload_url, content=content, headers=headers)
+        response = client.put(upload_url, content=content, headers=blob_upload_headers(upload_url, headers))
         response.raise_for_status()
 
     def _start_job(self, client: httpx.Client, job_id: str) -> dict:
@@ -154,6 +154,20 @@ def upload_url_and_headers(entry: Any) -> tuple[str | None, dict]:
     if not isinstance(entry, dict):
         return None, {}
     return entry.get("file_url") or entry.get("upload_url") or entry.get("url"), entry.get("headers") or {}
+
+
+def blob_upload_headers(upload_url: str, headers: dict) -> dict:
+    """Add the header Azure Block Blob PUTs require.
+
+    Sarvam hands back a bare pre-signed Azure URL with no headers, and Azure rejects
+    the upload with "An HTTP header that's mandatory for this request is not
+    specified" unless x-ms-blob-type is present. Anything the provider does send wins.
+    """
+    if "blob.core.windows.net" not in upload_url:
+        return headers
+    if any(key.lower() == "x-ms-blob-type" for key in headers):
+        return headers
+    return {**headers, "x-ms-blob-type": "BlockBlob"}
 
 
 def download_url_and_headers(entry: Any) -> tuple[str | None, dict]:

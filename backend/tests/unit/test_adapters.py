@@ -26,7 +26,11 @@ from app.adapters.speech.sarvam_tts_adapter import (
 )
 from app.adapters.voice.livekit_adapter import LiveKitVoiceAdapter
 from app.domain.wiki.entities import WikiPage
-from app.interfaces.api.routes.voice_routes import audio_mime_for_codec
+from app.interfaces.api.routes.voice_routes import (
+    audio_mime_for_codec,
+    pop_ready_voice_segment,
+    remaining_voice_segment,
+)
 from app.domain.documents.entities import ExtractedDocument, ExtractedPage
 from app.infrastructure.db.models import WikiPageModel
 
@@ -749,3 +753,100 @@ def _decode_segment(segment: str) -> bytes:
     import base64
 
     return base64.urlsafe_b64decode(segment + ("=" * (-len(segment) % 4)))
+
+
+def test_voice_segmentation_speaks_the_whole_answer_without_shortening_it():
+    answer = (
+        "The document lists four services. "
+        "It covers application development and UI design. "
+        "It also covers server support and long-term maintenance. "
+        "Support runs for twelve months after delivery."
+    )
+
+    buffer = ""
+    spoken_segments = []
+    for delta in [answer[index : index + 17] for index in range(0, len(answer), 17)]:
+        buffer += delta
+        while True:
+            segment, buffer = pop_ready_voice_segment(buffer)
+            if not segment:
+                break
+            spoken_segments.append(segment)
+
+    spoken_text = " ".join(spoken_segments)
+    remaining = remaining_voice_segment(answer, spoken_text, buffer)
+    full_spoken = " ".join(part for part in [spoken_text, remaining] if part)
+
+    assert " ".join(full_spoken.split()) == " ".join(answer.split())
+    assert len(spoken_segments) == 4
+    assert "twelve months" in full_spoken
+
+
+def test_voice_segmentation_splits_on_devanagari_danda():
+    segment, pending = pop_ready_voice_segment("invoice due date 30 days है। और payment")
+
+    assert segment == "invoice due date 30 days है।"
+    assert pending == "और payment"
+
+
+def test_remaining_voice_segment_covers_the_non_streaming_fallback():
+    assert remaining_voice_segment("Full answer text.", "") == "Full answer text."
+    assert remaining_voice_segment("A. B.", "A.") == "B."
+    assert remaining_voice_segment("A. B.", "Reshaped A.", "B.") == "B."
+
+
+def test_azure_blob_upload_gets_the_mandatory_block_type_header():
+    from app.adapters.ocr.sarvam_document_intelligence_adapter import blob_upload_headers
+
+    azure = "https://acct.blob.core.windows.net/bulk/inputs/doc.pdf?sig=abc"
+
+    assert blob_upload_headers(azure, {})["x-ms-blob-type"] == "BlockBlob"
+    # Provider-supplied headers win, and non-Azure targets are left untouched.
+    assert blob_upload_headers(azure, {"x-ms-blob-type": "PageBlob"})["x-ms-blob-type"] == "PageBlob"
+    assert blob_upload_headers("https://example.com/upload", {}) == {}
+
+
+def test_wiki_agent_recovers_from_a_reply_missing_an_action():
+    from app.adapters.llm.openrouter_wiki_generator_adapter import OpenRouterWikiGeneratorAdapter
+    from app.domain.documents.entities import ExtractedDocument, ExtractedPage
+    from app.domain.wiki.entities import WikiPage
+
+    replies = [
+        {"notes": "thinking out loud"},  # off-spec: no action, no pages
+        {
+            "action": "write_page",
+            "page_id": "page-1",
+            "path": "wiki/policy.md",
+            "title": "Policy",
+            "content": "# Policy\n\n## Terms\nPayment terms are 30 days.",
+            "summary": "Payment terms.",
+        },
+        {"action": "finish", "notes": "done"},
+    ]
+
+    adapter = OpenRouterWikiGeneratorAdapter(api_key="k", base_url="https://example.com", model="m")
+    adapter._call_json = lambda messages: replies.pop(0)
+
+    document = ExtractedDocument(
+        document_id="doc-1",
+        filename="policy.md",
+        file_type="md",
+        pages=[ExtractedPage(page_number=1, text="Payment terms are 30 days.")],
+        metadata={},
+    )
+    existing = [
+        WikiPage(
+            id="page-1",
+            workspace_id="ws-1",
+            path="wiki/policy.md",
+            title="Policy",
+            content="# Policy\n\n## Terms\nOld terms.",
+            summary="Old.",
+            created_from_document_ids=["doc-0"],
+        )
+    ]
+
+    bundle = adapter.generate("ws-1", document, existing_pages=existing)
+
+    assert [page.path for page in bundle.pages] == ["wiki/policy.md"]
+    assert not replies

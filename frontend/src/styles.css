@@ -2,11 +2,30 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Wikitics UI language
+  --------------------
+  Quiet instrument: an editorial, precise surface for reading and asking.
+  - Geist for interface text, Instrument Serif reserved for the wordmark only.
+  - One accent (#88BDF2) used as a marker rail for "you are here", never as decoration.
+  - Radii step down with nesting: 12px shells, 10px rows, 8px controls. No pill soup.
+  - Depth comes from a tinted ground + white raised rows, not from borders everywhere.
+*/
+
 :root {
-  color: #384959;
+  --ink: #384959;
+  --steel: #64748b;
+  --accent: #88bdf2;
+  --canvas: #f5f7f9;
+  --hairline: #e5e9ef;
+  --rail-width: 2px;
+
+  color: var(--ink);
   background: #ffffff;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-feature-settings: "cv05" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -17,15 +36,15 @@ textarea {
 }
 
 .icon-button {
-  @apply inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-steel transition hover:border-ink hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex h-10 w-10 items-center justify-center rounded-[10px] border border-hairline bg-white text-steel transition hover:border-ink hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .top-icon-button {
-  @apply inline-flex h-10 w-10 items-center justify-center rounded-2xl border-0 bg-transparent text-steel transition hover:bg-slate-100 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex h-10 w-10 items-center justify-center rounded-[10px] border-0 bg-transparent text-steel transition hover:bg-wash hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .command-button {
-  @apply inline-flex items-center justify-center gap-2 rounded-md bg-ink px-3 py-2 text-sm font-medium text-white transition hover:bg-[#2f3f4f] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex items-center justify-center gap-2 rounded-[10px] bg-ink px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#2f3f4f] disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .command-button-square {
@@ -33,11 +52,11 @@ textarea {
 }
 
 .secondary-button {
-  @apply inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-steel transition hover:border-ink hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex items-center justify-center gap-2 rounded-[10px] border border-hairline bg-white px-4 py-2.5 text-sm font-medium text-steel transition hover:border-ink hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .field {
-  @apply w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-ink focus:ring-2 focus:ring-slate-100;
+  @apply w-full rounded-[10px] border border-hairline bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/15;
 }
 
 .field-square {
@@ -45,107 +64,174 @@ textarea {
 }
 
 .auth-tab {
-  @apply rounded-2xl px-5 py-3 text-sm font-semibold text-slate-500 transition hover:text-ink;
+  @apply rounded-[9px] px-5 py-2.5 text-sm font-medium text-steel transition hover:text-ink;
 }
 
 .auth-tab-active {
-  @apply rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-ink shadow-sm;
+  @apply rounded-[9px] bg-white px-5 py-2.5 text-sm font-semibold text-ink shadow-[0_1px_2px_rgb(56_73_89/8%)] ring-1 ring-hairline;
 }
 
-.workspace-row {
-  @apply relative grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-2xl text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-ink;
+/* ---------------------------------------------------------------- sidebar */
+
+.sidebar-shell {
+  @apply border-b border-hairline bg-canvas lg:h-screen lg:border-b-0 lg:border-r;
 }
 
-.workspace-row-active {
-  @apply relative grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-2xl bg-slate-100 text-sm font-semibold text-ink;
+.sidebar-inner {
+  @apply flex h-full flex-col gap-6 px-3 pb-3 pt-4;
 }
 
-.workspace-tree-item {
-  @apply grid gap-1;
+.sidebar-inner-collapsed {
+  @apply flex h-full flex-col items-center gap-4 px-2 pb-3 pt-4;
 }
 
-.brand-button-collapsed {
-  @apply grid h-10 w-10 place-items-center rounded-xl text-xl font-bold text-ink transition hover:bg-slate-100;
+.sidebar-header {
+  @apply flex items-center justify-between gap-2 pl-2;
 }
 
 .brand-text-button {
-  @apply flex min-w-0 items-center text-left text-3xl font-bold text-ink transition hover:text-steel;
+  @apply flex min-w-0 items-baseline gap-1.5 text-left transition hover:opacity-70;
+}
+
+.brand-wordmark {
+  @apply font-display text-[26px] leading-none tracking-[-0.01em] text-ink;
+}
+
+.brand-dot {
+  @apply h-1.5 w-1.5 shrink-0 rounded-full bg-accent;
+}
+
+.brand-button-collapsed {
+  @apply grid h-9 w-9 place-items-center rounded-[10px] font-display text-xl text-ink transition hover:bg-wash;
 }
 
 .sidebar-collapse-button {
-  @apply grid h-10 w-10 place-items-center rounded-xl text-steel transition hover:bg-slate-100 hover:text-ink focus-visible:ring-2 focus-visible:ring-slate-200;
+  @apply grid h-9 w-9 shrink-0 place-items-center rounded-[10px] text-steel transition hover:bg-wash hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
 }
 
 .new-workspace-button {
-  @apply mb-8 flex w-full items-center gap-3 px-3 py-2 text-left text-base font-semibold text-ink transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50;
+  @apply flex w-full items-center gap-2.5 rounded-[10px] border border-hairline bg-white px-3 py-2.5 text-left text-[13.5px] font-medium text-ink shadow-[0_1px_2px_rgb(56_73_89/6%)] transition hover:border-ink/25 hover:shadow-[0_2px_6px_rgb(56_73_89/10%)] disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .workspace-section-heading {
-  @apply mb-4 px-3 text-base font-semibold text-ink;
+  @apply mb-2 mt-5 px-2 text-[10.5px] font-semibold uppercase tracking-[0.16em] text-steel/70;
+}
+
+.sidebar-nav {
+  @apply scrollbar-soft -mr-1 min-h-0 flex-1 overflow-y-auto pr-1;
+}
+
+.workspace-tree-item {
+  @apply grid gap-0.5;
+}
+
+/* Rows: a shared base so workspace + conversation rows read as one family. */
+.workspace-row,
+.workspace-row-active,
+.conversation-row,
+.conversation-row-active {
+  @apply relative grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-[10px] transition;
+}
+
+.workspace-row,
+.conversation-row {
+  @apply text-steel hover:bg-white/70 hover:text-ink;
+}
+
+.workspace-row-active,
+.conversation-row-active {
+  @apply bg-white text-ink shadow-[0_1px_2px_rgb(56_73_89/7%)] ring-1 ring-hairline;
+}
+
+/* The accent rail is the single "you are here" signal. */
+.workspace-row-active::before,
+.conversation-row-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 16px;
+  width: var(--rail-width);
+  transform: translateY(-50%);
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
 }
 
 .workspace-title-button {
-  @apply min-w-0 overflow-hidden rounded-2xl px-4 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-slate-200;
-}
-
-.workspace-menu-trigger {
-  @apply mr-2 grid h-8 w-8 place-items-center rounded-full text-slate-400 opacity-0 transition hover:bg-white hover:text-ink focus:opacity-100 focus-visible:ring-2 focus-visible:ring-slate-200 group-hover:opacity-100;
-}
-
-.workspace-menu {
-  @apply absolute right-2 top-10 z-30 min-w-40 rounded-2xl bg-white p-1 shadow-xl ring-1 ring-slate-200;
-}
-
-.workspace-menu-danger {
-  @apply flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50;
-}
-
-.workspace-children {
-  @apply ml-4 grid gap-1 border-l border-slate-200 py-1 pl-3;
-}
-
-.workspace-child-button {
-  @apply flex min-w-0 items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-ink;
-}
-
-.workspace-child-button-active {
-  @apply flex min-w-0 items-center gap-2 rounded-2xl bg-slate-100 px-3 py-2 text-left text-sm font-semibold text-ink;
-}
-
-.workspace-child-action {
-  @apply flex min-w-0 items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-semibold text-ink transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50;
-}
-
-.workspace-conversation-list {
-  @apply scrollbar-soft mt-2 grid max-h-72 gap-1 overflow-auto pr-1;
-}
-
-.conversation-row {
-  @apply relative grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-2xl text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-ink;
-}
-
-.conversation-row-active {
-  @apply relative grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-2xl bg-slate-100 text-sm font-semibold text-ink;
+  @apply min-w-0 overflow-hidden rounded-[10px] px-3 py-2 text-left text-[13.5px] font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-accent/50;
 }
 
 .conversation-title-button {
-  @apply min-w-0 overflow-hidden rounded-2xl px-4 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-slate-200;
+  @apply min-w-0 overflow-hidden rounded-[10px] px-3 py-[7px] text-left text-[13px] font-normal outline-none transition focus-visible:ring-2 focus-visible:ring-accent/50;
 }
 
+.conversation-row-active .conversation-title-button {
+  @apply font-medium;
+}
+
+.workspace-menu-trigger,
 .conversation-menu-trigger {
-  @apply mr-2 grid h-8 w-8 place-items-center rounded-full text-slate-400 transition hover:bg-white hover:text-ink focus-visible:ring-2 focus-visible:ring-slate-200;
+  @apply mr-1.5 grid h-7 w-7 place-items-center rounded-[7px] text-slate-400 opacity-0 transition hover:bg-wash hover:text-ink focus:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50 group-hover:opacity-100;
 }
 
+.workspace-menu,
 .conversation-menu {
-  @apply absolute right-2 top-10 z-20 min-w-40 rounded-2xl bg-white p-1 shadow-xl ring-1 ring-slate-200;
+  @apply absolute right-2 top-9 z-30 min-w-40 rounded-[10px] border border-hairline bg-white p-1 shadow-[0_12px_28px_rgb(56_73_89/14%)];
 }
 
+.workspace-menu-danger,
 .conversation-menu-danger {
-  @apply flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50;
+  @apply flex w-full items-center gap-2 rounded-[7px] px-2.5 py-2 text-left text-[13px] font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50;
 }
+
+/* Nested children hang off a single hairline guide instead of stacking boxes. */
+.workspace-children {
+  @apply ml-3 grid gap-0.5 border-l border-hairline py-1 pl-2;
+}
+
+.workspace-child-button,
+.workspace-child-button-active,
+.workspace-child-action {
+  @apply flex min-w-0 items-center gap-2 rounded-[9px] px-2.5 py-[7px] text-left text-[13px] font-medium transition;
+}
+
+.workspace-child-button,
+.workspace-child-action {
+  @apply text-steel hover:bg-white/70 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.workspace-child-button-active {
+  @apply bg-white text-ink shadow-[0_1px_2px_rgb(56_73_89/7%)] ring-1 ring-hairline;
+}
+
+.workspace-conversation-list {
+  @apply mt-1.5 grid gap-0.5;
+}
+
+.conversation-group-label {
+  @apply px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-steel/60;
+}
+
+.sidebar-footer {
+  @apply mt-auto border-t border-hairline pt-2;
+}
+
+.sidebar-logout-button {
+  @apply flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-[13px] font-medium text-steel transition hover:bg-white/70 hover:text-ink;
+}
+
+.sidebar-rail-tile {
+  @apply grid h-9 w-9 place-items-center rounded-[10px] text-[12px] font-semibold text-steel transition hover:bg-white hover:text-ink;
+}
+
+.sidebar-rail-tile-active {
+  @apply grid h-9 w-9 place-items-center rounded-[10px] bg-white text-[12px] font-semibold text-ink shadow-[0_1px_2px_rgb(56_73_89/8%)] ring-1 ring-hairline;
+}
+
+/* ------------------------------------------------------------ documents */
 
 .upload-card {
-  @apply grid min-h-64 cursor-pointer place-items-center gap-3 rounded-md border border-dashed border-slate-200 bg-white p-8 text-center text-steel shadow-sm transition hover:border-ink hover:text-ink;
+  @apply grid min-h-64 cursor-pointer place-items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-steel transition hover:border-ink hover:text-ink;
 }
 
 .upload-card-disabled {
@@ -167,7 +253,7 @@ textarea {
 }
 
 .step-line {
-  @apply bg-slate-200;
+  @apply bg-hairline;
 }
 
 .step-line-active {
@@ -178,11 +264,11 @@ textarea {
 .step-dot,
 .step-dot-active,
 .step-dot-current {
-  @apply relative z-10 grid h-12 w-12 shrink-0 place-items-center rounded-full text-base font-bold shadow-sm;
+  @apply relative z-10 grid h-12 w-12 shrink-0 place-items-center rounded-full text-base font-semibold;
 }
 
 .step-dot {
-  @apply bg-slate-100 text-slate-400;
+  @apply bg-wash text-slate-400;
 }
 
 .step-dot-active {
@@ -190,61 +276,174 @@ textarea {
 }
 
 .step-dot-current {
-  @apply bg-[#88BDF2] text-ink;
+  @apply bg-accent text-ink;
   box-shadow: 0 0 0 8px rgb(136 189 242 / 18%);
   animation: step-pulse 1100ms ease-in-out infinite;
 }
 
 .step-label,
 .step-label-active {
-  @apply truncate text-base font-semibold;
+  @apply truncate text-sm font-medium;
 }
 
 .step-label {
-  @apply text-slate-500;
+  @apply text-steel;
 }
 
 .step-label-active {
   @apply text-ink;
 }
 
+/* ---------------------------------------------------------------- voice */
+
 .mic-button {
-  @apply grid h-52 w-52 place-items-center rounded-full border border-slate-200 bg-white text-ink shadow-sm transition duration-300 hover:scale-[1.02] hover:border-ink disabled:cursor-not-allowed disabled:opacity-60;
+  @apply grid h-52 w-52 place-items-center rounded-full border border-hairline bg-white text-ink transition duration-300 hover:scale-[1.02] hover:border-ink disabled:cursor-not-allowed disabled:opacity-60;
+  box-shadow: 0 10px 30px rgb(56 73 89 / 8%);
 }
 
 .mic-button-listening {
-  @apply border-ink bg-ink text-white shadow-lg;
+  @apply border-ink bg-ink text-white;
   box-shadow: 0 22px 55px rgb(56 73 89 / 24%);
 }
 
-.mic-button-thinking {
-  @apply border-ink bg-white text-ink shadow-lg;
-  box-shadow: 0 22px 55px rgb(56 73 89 / 18%);
-}
-
+.mic-button-thinking,
 .mic-button-speaking {
-  @apply border-ink bg-white text-ink shadow-lg;
+  @apply border-ink bg-white text-ink;
   box-shadow: 0 22px 55px rgb(56 73 89 / 18%);
 }
 
 .voice-state {
-  @apply rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-medium text-slate-500 shadow-sm;
+  @apply rounded-full border border-hairline bg-white px-3.5 py-1.5 text-[13px] font-medium text-steel;
+}
+
+/* --------------------------------------------------------- conversation */
+
+/* Flex column + `mt-auto` on the child anchors the thread to the bottom while
+   still scrolling from the top once it overflows. */
+.chat-transcript {
+  @apply scrollbar-soft flex min-h-0 w-full flex-col overflow-auto px-4 py-6 sm:px-6;
+  /* Reserve the scrollbar on both sides so the reading column stays centred
+     whether or not the thread overflows - and stays aligned with the composer. */
+  scrollbar-gutter: stable both-edges;
+}
+
+/* One reading column keeps the measure honest on wide screens. */
+.chat-column {
+  @apply mx-auto mt-auto grid w-full max-w-[46rem] gap-7;
+}
+
+.chat-column-empty {
+  @apply mb-auto;
+}
+
+.chat-row-user {
+  @apply flex justify-end;
+}
+
+/* `group/message` is set in the markup - marker classes cannot be @apply-ed. */
+.chat-row-agent {
+  @apply flex flex-col items-start gap-1.5;
 }
 
 .chat-bubble-user {
-  @apply max-w-[76%] whitespace-pre-wrap rounded-[28px] bg-ink px-5 py-3 text-base leading-7 text-white;
+  @apply max-w-[85%] whitespace-pre-wrap rounded-[16px] rounded-br-[6px] bg-ink px-4 py-2.5 text-[15px] leading-[1.6] text-white;
 }
 
 .chat-bubble-agent {
-  @apply max-w-[76%] whitespace-pre-wrap bg-transparent px-1 py-2 text-base leading-7 text-ink;
+  @apply w-full whitespace-pre-wrap text-[15.5px] leading-[1.75] text-ink;
 }
 
+.chat-bubble-agent strong {
+  @apply font-semibold text-ink;
+}
+
+.chat-message-actions {
+  @apply flex items-center gap-1 opacity-0 transition focus-within:opacity-100 group-hover/message:opacity-100;
+}
+
+.chat-action-button {
+  @apply inline-flex items-center gap-1.5 rounded-[7px] px-2 py-1 text-[11.5px] font-medium text-steel transition hover:bg-wash hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
+}
+
+/* A failed turn: recoverable and in-thread, deliberately not an alert bar. */
+.chat-bubble-retry {
+  @apply flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[14px] border border-hairline bg-canvas px-4 py-2.5 text-[14.5px] text-steel;
+}
+
+.chat-retry-button {
+  @apply inline-flex items-center gap-1.5 rounded-[8px] px-2 py-1 text-[12.5px] font-medium text-ink transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
+}
+
+.chat-empty {
+  @apply mx-auto grid max-w-md place-items-center gap-2 pt-14 text-center;
+}
+
+.chat-empty-title {
+  @apply font-display text-[28px] leading-tight text-ink;
+}
+
+.chat-empty-hint {
+  @apply text-[13.5px] leading-relaxed text-steel;
+}
+
+.chat-thinking {
+  @apply flex items-center gap-1.5 py-1;
+}
+
+.chat-thinking span {
+  @apply h-1.5 w-1.5 rounded-full bg-steel/45;
+  animation: thinking-pulse 1200ms ease-in-out infinite;
+}
+
+.chat-thinking span:nth-child(2) {
+  animation-delay: 160ms;
+}
+
+.chat-thinking span:nth-child(3) {
+  animation-delay: 320ms;
+}
+
+/* Same padding shell as the transcript so both columns share one left edge. */
+.chat-composer-wrap {
+  @apply w-full px-4 pb-1 sm:px-6;
+}
+
+.chat-composer-column {
+  @apply mx-auto w-full max-w-[46rem];
+}
+
+.chat-composer {
+  @apply flex w-full items-end gap-2 rounded-[18px] border border-hairline bg-white px-3 py-2.5 transition;
+  box-shadow: 0 1px 2px rgb(56 73 89 / 5%);
+}
+
+.chat-composer:focus-within {
+  @apply border-accent;
+  box-shadow:
+    0 0 0 4px rgb(136 189 242 / 16%),
+    0 4px 14px rgb(56 73 89 / 7%);
+}
+
+.chat-composer-input {
+  @apply max-h-40 min-h-9 flex-1 resize-none overflow-auto border-0 bg-transparent px-2 py-1.5 text-[15px] leading-6 text-ink outline-none placeholder:text-slate-400;
+}
+
+.composer-send {
+  @apply grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-ink text-white transition hover:bg-[#2f3f4f] disabled:cursor-not-allowed disabled:bg-wash disabled:text-slate-400;
+}
+
+.composer-hint {
+  @apply px-2 pt-2 text-center text-[11.5px] text-steel/70;
+}
+
+/* --------------------------------------------------------------- shared */
+
 .notice-error {
-  @apply rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-700;
+  @apply rounded-[10px] border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700;
 }
 
 .notice-info {
-  @apply rounded-md bg-slate-50 px-3 py-2 text-sm font-medium text-ink;
+  @apply rounded-[10px] border border-hairline bg-canvas px-3 py-2 text-sm font-medium text-ink;
 }
 
 .document-drop-overlay {
@@ -252,15 +451,11 @@ textarea {
 }
 
 .document-drop-target {
-  @apply grid place-items-center gap-3 rounded-3xl border border-dashed border-ink bg-white px-10 py-8 text-lg font-semibold text-ink shadow-lg;
+  @apply grid place-items-center gap-3 rounded-2xl border border-dashed border-ink bg-white px-10 py-8 text-lg font-medium text-ink shadow-[0_18px_40px_rgb(56_73_89/16%)];
 }
 
 .workspace-title {
-  @apply truncate text-lg font-bold text-ink;
-}
-
-.sidebar-logout-button {
-  @apply flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-ink;
+  @apply truncate text-lg font-semibold text-ink;
 }
 
 .agent-shell {
@@ -272,7 +467,7 @@ textarea {
 }
 
 .mode-toggle {
-  @apply mx-auto grid w-full max-w-xs grid-cols-2 rounded-3xl bg-slate-100 p-1.5;
+  @apply mx-auto grid w-full max-w-[15rem] grid-cols-2 rounded-[11px] bg-wash p-1;
 }
 
 .agent-processing-slot {
@@ -280,35 +475,11 @@ textarea {
 }
 
 .agent-processing-panel {
-  @apply mx-auto grid w-full max-w-2xl gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm;
+  @apply mx-auto grid w-full max-w-2xl gap-3 rounded-xl border border-hairline bg-white p-4;
 }
 
 .voice-canvas {
   @apply grid min-h-0 place-items-center content-center gap-4;
-}
-
-.chat-transcript {
-  @apply min-h-0 w-full space-y-5 overflow-auto px-1 py-4 sm:px-6;
-}
-
-.chat-row-user {
-  @apply flex justify-end;
-}
-
-.chat-row-agent {
-  @apply flex justify-start;
-}
-
-.chat-composer {
-  @apply mx-auto flex w-full max-w-5xl items-end gap-3 rounded-[34px] border border-slate-200 bg-white px-5 py-4 shadow-sm;
-}
-
-.chat-composer-input {
-  @apply max-h-40 min-h-10 flex-1 resize-none overflow-auto border-0 bg-transparent px-1 py-2 text-base leading-6 text-ink outline-none placeholder:text-slate-400;
-}
-
-.composer-send {
-  @apply grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#88BDF2] text-ink transition hover:bg-[#78afe8] disabled:cursor-not-allowed disabled:opacity-45;
 }
 
 .animate-panel {
@@ -326,8 +497,12 @@ textarea {
 }
 
 .scrollbar-soft::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #d5dbe3;
   border-radius: 999px;
+}
+
+.scrollbar-soft::-webkit-scrollbar-thumb:hover {
+  background: #bfc8d4;
 }
 
 @keyframes panel-in {
@@ -339,6 +514,19 @@ textarea {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
   }
 }
 
@@ -364,5 +552,15 @@ textarea {
   to {
     transform: translateY(-50%) scaleX(1);
     transform-origin: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

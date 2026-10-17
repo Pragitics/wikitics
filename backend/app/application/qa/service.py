@@ -1,9 +1,10 @@
-import re
 from collections.abc import Iterator
-from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from time import perf_counter
 
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.application.qa.context import build_context_pack, citations_from_results, context_profile
@@ -25,11 +26,17 @@ from app.shared.retry import retry_call
 from app.shared.user_errors import AI_SERVICE_UNAVAILABLE
 
 
-SUMMARY_MESSAGE_THRESHOLD = 12
-SUMMARY_STALE_MESSAGE_THRESHOLD = 6
+SUMMARY_MESSAGE_THRESHOLD = 8
+SUMMARY_STALE_MESSAGE_THRESHOLD = 4
 SUMMARY_CHAR_THRESHOLD = 3000
 SUMMARY_MAX_MESSAGES = 18
 SUMMARY_MAX_CHARACTERS = 1600
+UNTITLED_CONVERSATION = "New chat"
+BACKGROUND_WORKERS = 4
+
+_background_executor = ThreadPoolExecutor(max_workers=BACKGROUND_WORKERS, thread_name_prefix="qa-background")
+_maintenance_inflight: set[str] = set()
+_maintenance_lock = Lock()
 
 
 class QAService:
@@ -57,8 +64,8 @@ class QAService:
         trace: dict[str, float] = {}
         profile = context_profile(mode)
         resolved_voice_style = self._workspace_voice_style_preference(workspace_id, voice_style_preference, mode)
-        conversation_context = self._conversation_context(user_id, workspace_id, conversation_id, mode)
-        retrieval_query = retrieval_query_with_memory(question, conversation_context)
+        conversation_context, memory_summary = self._conversation_context(user_id, workspace_id, conversation_id, mode)
+        retrieval_query = retrieval_query_with_memory(question, memory_summary)
         results = self._retrieve_results(
             user_id,
             workspace_id,
@@ -88,8 +95,6 @@ class QAService:
             )
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=AI_SERVICE_UNAVAILABLE) from exc
-        if mode == "voice":
-            answer = shape_voice_answer(answer, question)
         citations = citations_from_results(results)
         wiki_page_ids_by_chunk = {
             result.chunk_id: result.payload.get("wiki_page_id")
@@ -114,8 +119,7 @@ class QAService:
                 )
             )
         self.db.commit()
-        self._schedule_conversation_title(conversation.id)
-        self._schedule_conversation_summary(conversation.id)
+        self._schedule_conversation_maintenance(conversation.id)
         return {
             "answer": answer,
             "conversation_id": conversation.id,
@@ -145,8 +149,8 @@ class QAService:
         trace: dict[str, float] = {}
         profile = context_profile(mode)
         resolved_voice_style = self._workspace_voice_style_preference(workspace_id, voice_style_preference, mode)
-        conversation_context = self._conversation_context(user_id, workspace_id, conversation_id, mode)
-        retrieval_query = retrieval_query_with_memory(question, conversation_context)
+        conversation_context, memory_summary = self._conversation_context(user_id, workspace_id, conversation_id, mode)
+        retrieval_query = retrieval_query_with_memory(question, memory_summary)
         results = self._retrieve_results(
             user_id,
             workspace_id,
@@ -205,8 +209,6 @@ class QAService:
                 yield {"type": "error", "message": AI_SERVICE_UNAVAILABLE}
                 return
             yield {"type": "answer_delta", "delta": answer}
-        if mode == "voice":
-            answer = shape_voice_answer(answer, question)
         citations = citations_from_results(results)
         wiki_page_ids_by_chunk = {
             result.chunk_id: result.payload.get("wiki_page_id")
@@ -231,8 +233,7 @@ class QAService:
                 )
             )
         self.db.commit()
-        self._schedule_conversation_title(conversation.id)
-        self._schedule_conversation_summary(conversation.id)
+        self._schedule_conversation_maintenance(conversation.id)
         yield {
             "type": "final",
             "answer": answer,
@@ -281,14 +282,15 @@ class QAService:
             .order_by(ConversationModel.updated_at.desc())
             .all()
         )
+        message_counts = self._message_counts([row.id for row in rows])
         return [
             {
                 "id": row.id,
                 "workspace_id": row.workspace_id,
                 "user_id": row.user_id,
                 "mode": row.mode,
-                "title": row.title or self._conversation_title(row.id),
-                "message_count": self._conversation_message_count(row.id),
+                "title": row.title or UNTITLED_CONVERSATION,
+                "message_count": message_counts.get(row.id, 0),
                 "created_at": row.created_at.isoformat(),
                 "updated_at": row.updated_at.isoformat(),
             }
@@ -330,14 +332,13 @@ class QAService:
         trace: dict[str, float] | None = None,
     ) -> list[SearchResult]:
         ensure_workspace_member(self.db, user_id, workspace_id)
-        normalized_query = normalize_question(query)
         return _timed(
             trace,
             "wiki_search",
             "qa.wiki_search_seconds",
             lambda: self.wiki_search.search(
                 workspace_id,
-                normalized_query or query,
+                query,
                 document_ids=document_ids,
                 max_results=max_results,
             ),
@@ -361,9 +362,10 @@ class QAService:
         workspace_id: str,
         conversation_id: str | None,
         mode: str,
-    ) -> str:
+    ) -> tuple[str, str]:
+        """Return (context for the prompt, model-written memory summary for the retrieval query)."""
         if not conversation_id:
-            return ""
+            return "", ""
         conversation = self.db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
         if conversation is None or conversation.user_id != user_id or conversation.workspace_id != workspace_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
@@ -380,88 +382,105 @@ class QAService:
             .all()
         )
         recent_context = format_conversation_context(list(reversed(messages)), remaining_budget)
-        return combine_conversation_memory(summary, recent_context, profile["history_char_limit"])
+        return combine_conversation_memory(summary, recent_context, profile["history_char_limit"]), summary
 
-    def _conversation_title(self, conversation_id: str) -> str:
-        message = (
-            self.db.query(MessageModel)
-            .filter(MessageModel.conversation_id == conversation_id, MessageModel.role == "user")
-            .order_by(MessageModel.created_at.asc())
-            .first()
+    def _schedule_conversation_maintenance(self, conversation_id: str) -> None:
+        """Queue the title and summary jobs as one background task per conversation.
+
+        One task, one DB session, and at most one in flight per conversation - a burst of
+        turns on the same chat coalesces instead of stacking up threads.
+        """
+        if not getattr(self.llm, "api_key", ""):
+            return
+        if not (hasattr(self.llm, "title") or hasattr(self.llm, "summarize_conversation")):
+            return
+        with _maintenance_lock:
+            if conversation_id in _maintenance_inflight:
+                return
+            _maintenance_inflight.add(conversation_id)
+        try:
+            _background_executor.submit(self._run_conversation_maintenance, conversation_id)
+        except RuntimeError:
+            self._release_maintenance(conversation_id)
+
+    def _run_conversation_maintenance(self, conversation_id: str) -> None:
+        try:
+            with SessionLocal() as db:
+                if hasattr(self.llm, "title"):
+                    self._generate_conversation_title(db, conversation_id)
+                if hasattr(self.llm, "summarize_conversation"):
+                    self._summarize_conversation(db, conversation_id)
+        except Exception:
+            return
+        finally:
+            self._release_maintenance(conversation_id)
+
+    @staticmethod
+    def _release_maintenance(conversation_id: str) -> None:
+        with _maintenance_lock:
+            _maintenance_inflight.discard(conversation_id)
+
+    def _generate_conversation_title(self, db: Session, conversation_id: str) -> None:
+        try:
+            conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
+            if conversation is None or conversation.title:
+                return
+            messages = (
+                db.query(MessageModel)
+                .filter(MessageModel.conversation_id == conversation_id, MessageModel.role.in_(["user", "assistant"]))
+                .order_by(MessageModel.created_at.asc())
+                .limit(6)
+                .all()
+            )
+            if not messages:
+                return
+            title = self.llm.title([{"role": message.role, "content": message.content} for message in messages])
+            if not title:
+                return
+            conversation.title = title[:120]
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    def _summarize_conversation(self, db: Session, conversation_id: str) -> None:
+        try:
+            conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
+            if conversation is None:
+                return
+            messages = (
+                db.query(MessageModel)
+                .filter(MessageModel.conversation_id == conversation_id, MessageModel.role.in_(["user", "assistant"]))
+                .order_by(MessageModel.created_at.asc())
+                .all()
+            )
+            if not conversation_needs_summary(conversation, messages):
+                return
+            new_messages = messages_since_cursor(messages, conversation.memory_message_cursor)
+            if not new_messages:
+                return
+            summary = self.llm.summarize_conversation(
+                conversation.memory_summary or "",
+                [{"role": message.role, "content": message.content} for message in new_messages[-SUMMARY_MAX_MESSAGES:]],
+            )
+            if not summary:
+                return
+            conversation.memory_summary = " ".join(str(summary).split())[:SUMMARY_MAX_CHARACTERS]
+            conversation.memory_updated_at = utcnow()
+            conversation.memory_message_cursor = messages[-1].id
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    def _message_counts(self, conversation_ids: list[str]) -> dict[str, int]:
+        if not conversation_ids:
+            return {}
+        rows = (
+            self.db.query(MessageModel.conversation_id, func.count(MessageModel.id))
+            .filter(MessageModel.conversation_id.in_(conversation_ids))
+            .group_by(MessageModel.conversation_id)
+            .all()
         )
-        if message is None:
-            return "New chat"
-        return "New chat"
-
-    def _schedule_conversation_title(self, conversation_id: str) -> None:
-        if not hasattr(self.llm, "title"):
-            return
-        if not getattr(self.llm, "api_key", ""):
-            return
-        Thread(target=self._generate_conversation_title, args=(conversation_id,), daemon=True).start()
-
-    def _generate_conversation_title(self, conversation_id: str) -> None:
-        try:
-            with SessionLocal() as db:
-                conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
-                if conversation is None or conversation.title:
-                    return
-                messages = (
-                    db.query(MessageModel)
-                    .filter(MessageModel.conversation_id == conversation_id, MessageModel.role.in_(["user", "assistant"]))
-                    .order_by(MessageModel.created_at.asc())
-                    .limit(6)
-                    .all()
-                )
-                if not messages:
-                    return
-                title = self.llm.title([{"role": message.role, "content": message.content} for message in messages])
-                if not title:
-                    return
-                conversation.title = title[:120]
-                db.commit()
-        except Exception:
-            return
-
-    def _schedule_conversation_summary(self, conversation_id: str) -> None:
-        if not hasattr(self.llm, "summarize_conversation"):
-            return
-        if not getattr(self.llm, "api_key", ""):
-            return
-        Thread(target=self._summarize_conversation, args=(conversation_id,), daemon=True).start()
-
-    def _summarize_conversation(self, conversation_id: str) -> None:
-        try:
-            with SessionLocal() as db:
-                conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
-                if conversation is None:
-                    return
-                messages = (
-                    db.query(MessageModel)
-                    .filter(MessageModel.conversation_id == conversation_id, MessageModel.role.in_(["user", "assistant"]))
-                    .order_by(MessageModel.created_at.asc())
-                    .all()
-                )
-                if not conversation_needs_summary(conversation, messages):
-                    return
-                new_messages = messages_since_cursor(messages, conversation.memory_message_cursor)
-                if not new_messages:
-                    return
-                summary = self.llm.summarize_conversation(
-                    conversation.memory_summary or "",
-                    [{"role": message.role, "content": message.content} for message in new_messages[-SUMMARY_MAX_MESSAGES:]],
-                )
-                if not summary:
-                    return
-                conversation.memory_summary = " ".join(str(summary).split())[:SUMMARY_MAX_CHARACTERS]
-                conversation.memory_updated_at = utcnow()
-                conversation.memory_message_cursor = messages[-1].id
-                db.commit()
-        except Exception:
-            return
-
-    def _conversation_message_count(self, conversation_id: str) -> int:
-        return self.db.query(MessageModel).filter(MessageModel.conversation_id == conversation_id).count()
+        return {conversation_id: count for conversation_id, count in rows}
 
     def _workspace_voice_style_preference(self, workspace_id: str, requested_preference: str, mode: str) -> str:
         if mode != "voice":
@@ -483,15 +502,15 @@ def serialize_search_result(result: SearchResult) -> dict:
     }
 
 
-def normalize_question(question: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", question.lower())
-    return " ".join(normalized.split())
+def retrieval_query_with_memory(question: str, memory_summary: str) -> str:
+    """Widen the retrieval query with the model-written memory summary only.
 
-
-def retrieval_query_with_memory(question: str, conversation_context: str) -> str:
-    if not conversation_context.strip():
+    The raw turn-by-turn transcript is deliberately left out: it is long enough to swamp the
+    actual question in the retrieval scoring.
+    """
+    if not memory_summary.strip():
         return question
-    return f"{conversation_context.strip()}\nCurrent question: {question}"
+    return f"Conversation memory: {memory_summary.strip()}\nCurrent question: {question}"
 
 
 def combine_conversation_memory(summary: str, recent_context: str, char_limit: int) -> str:
@@ -547,38 +566,6 @@ def messages_since_cursor(messages, cursor: str | None):
         if message.id == cursor:
             return list(messages[index + 1 :])
     return list(messages)
-
-
-def shape_voice_answer(answer: str, question: str) -> str:
-    normalized = " ".join(answer.split())
-    if not normalized:
-        return normalized
-    question_lower = question.lower()
-    detailed_request = bool(
-        re.search(
-            r"\b(learn|understand|explain|teach|why|how|walk me through|detail|detailed|compare|comparison|steps|process|describe|elaborate)\b",
-            question_lower,
-        )
-    )
-    wants_one_sentence = "one sentence" in question_lower or "short" in question_lower or "quick" in question_lower
-    sentence_limit = 1 if wants_one_sentence else 4 if detailed_request else 2
-    word_limit = 32 if wants_one_sentence else 120 if detailed_request else 70
-    sentences = split_sentences(normalized)
-    shaped = " ".join(sentences[:sentence_limit]) if sentences else normalized
-    return limit_words(shaped, word_limit)
-
-
-def split_sentences(text: str) -> list[str]:
-    sentences = [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", text) if sentence.strip()]
-    return sentences or [text.strip()]
-
-
-def limit_words(text: str, word_limit: int) -> str:
-    words = text.split()
-    if len(words) <= word_limit:
-        return text
-    trimmed = " ".join(words[:word_limit]).rstrip(" ,;:")
-    return f"{trimmed}."
 
 
 def _linked_document_ids(result: SearchResult) -> set[str]:

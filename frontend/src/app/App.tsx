@@ -1,6 +1,8 @@
 import { DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
+  Check,
+  Copy,
   FileUp,
   LogOut,
   MessageSquarePlus,
@@ -9,10 +11,11 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  RefreshCw,
   Trash2
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api } from "../services/api";
+import { api, CONNECTION_INTERRUPTED_MESSAGE } from "../services/api";
 import { useAuthStore } from "../stores/authStore";
 import type { AskResponse, ConversationSummary, DocumentRecord, VoiceSession, VoiceStreamEvent, Workspace } from "../types/api";
 
@@ -26,6 +29,9 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /* A failed turn is shown inline and can be retried, never as a red alert bar. */
+  tone?: "error";
+  retryPrompt?: string;
 };
 type StreamingAudioPlayer = {
   append: (chunk: Uint8Array) => void;
@@ -127,6 +133,7 @@ export default function App() {
   const [workspaceName, setWorkspaceName] = useState("");
   const [busy, setBusy] = useState(false);
   const [isDocumentDragActive, setIsDocumentDragActive] = useState(false);
+  const [failedUpload, setFailedUpload] = useState<File[] | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -360,7 +367,15 @@ export default function App() {
     }
   }
 
+  async function retryFailedUpload() {
+    const files = failedUpload;
+    if (!files?.length) return;
+    setFailedUpload(null);
+    await uploadAndProcessFiles(files);
+  }
+
   async function uploadAndProcessFiles(files: File[]) {
+    setFailedUpload(null);
     if (!token || !activeWorkspaceId || busy) return;
     const availableSlots = Math.max(0, maxDocumentsPerWorkspace - documents.length);
     if (availableSlots <= 0) {
@@ -399,9 +414,9 @@ export default function App() {
       setUploadStage("ready");
       setWorkspaceView("chat");
       setMode("voice");
-    } catch (error) {
+    } catch {
       setUploadStage("failed");
-      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Upload failed" });
+      setFailedUpload(files);
     } finally {
       setBusy(false);
     }
@@ -452,20 +467,29 @@ export default function App() {
     event.preventDefault();
     if (!token || !activeWorkspaceId || !question.trim()) return;
     const prompt = question.trim();
-    const userMessage = makeMessage("user", prompt);
     setQuestion("");
-    setMessages((items) => [...items, userMessage]);
+    setMessages((items) => [...items, makeMessage("user", prompt)]);
+    await askQuestion(prompt);
+  }
+
+  async function askQuestion(prompt: string) {
+    if (!token || !activeWorkspaceId) return;
     setBusy(true);
     setNotice(null);
     try {
       const response = await api.ask(token, activeWorkspaceId, prompt, conversationId);
       applyAgentResponse(response);
       refreshConversationListSoon();
-    } catch (error) {
-      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Ask failed" });
+    } catch {
+      setMessages((items) => [...items, makeRetryableMessage(prompt)]);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleRetryMessage(messageId: string, prompt: string) {
+    setMessages((items) => items.filter((item) => item.id !== messageId));
+    await askQuestion(prompt);
   }
 
   async function ensureVoiceSession(): Promise<VoiceSession | null> {
@@ -911,7 +935,7 @@ export default function App() {
         shouldListenAgain = voiceActiveRef.current && !bargeInHandled;
       }
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (isAbortError(error)) {
         shouldListenAgain = voiceActiveRef.current && !manualStopRef.current;
         return;
       }
@@ -919,6 +943,13 @@ export default function App() {
       if (message === "No speech detected" && voiceActiveRef.current) {
         shouldListenAgain = true;
         setNotice(null);
+      } else if (isRecoverableServiceError(message)) {
+        // A provider hiccup mid-conversation: surface it in the thread and keep
+        // the mic alive rather than dropping a red alert over the whole app.
+        setMessages((items) => [...items, makeRetryableMessage()]);
+        setVoiceState(voiceActiveRef.current ? "listening" : "idle");
+        setNotice(null);
+        shouldListenAgain = voiceActiveRef.current;
       } else {
         setVoiceState(voiceActiveRef.current ? "listening" : "idle");
         setNotice({ kind: "error", message });
@@ -1234,15 +1265,22 @@ export default function App() {
           </div>
         </div>
       )}
-      <aside className="border-b border-slate-200 bg-paper lg:h-screen lg:border-b-0 lg:border-r">
-        <div className={isSidebarCollapsed ? "flex h-full flex-col items-center gap-4 p-3" : "flex h-full flex-col gap-7 p-4"}>
-          <div className={isSidebarCollapsed ? "grid gap-3" : "flex items-center justify-between gap-2"}>
+      <aside className="sidebar-shell">
+        <div className={isSidebarCollapsed ? "sidebar-inner-collapsed" : "sidebar-inner"}>
+          <div className={isSidebarCollapsed ? "grid gap-3" : "sidebar-header"}>
             <button
               className={isSidebarCollapsed ? "brand-button-collapsed" : "brand-text-button"}
               onClick={() => navigate("/dashboard")}
               title="Wikitics"
             >
-              <span>{isSidebarCollapsed ? "W" : "Wikitics"}</span>
+              {isSidebarCollapsed ? (
+                <span>W</span>
+              ) : (
+                <>
+                  <span className="brand-wordmark">Wikitics</span>
+                  <span className="brand-dot" aria-hidden="true" />
+                </>
+              )}
             </button>
             <button
               type="button"
@@ -1251,12 +1289,31 @@ export default function App() {
               title={isSidebarCollapsed ? "Open sidebar" : "Close sidebar"}
               aria-label={isSidebarCollapsed ? "Open sidebar" : "Close sidebar"}
             >
-              {isSidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
+              {isSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             </button>
           </div>
 
+          {isSidebarCollapsed && (
+            <nav className="scrollbar-soft grid min-h-0 flex-1 auto-rows-max gap-1 overflow-y-auto" aria-label="Workspaces">
+              {workspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  className={workspace.id === activeWorkspaceId ? "sidebar-rail-tile-active" : "sidebar-rail-tile"}
+                  onClick={() => {
+                    setActiveWorkspaceId(workspace.id);
+                    navigate(`/workspaces/${workspace.id}`);
+                  }}
+                  title={workspace.name}
+                >
+                  {workspaceInitials(workspace.name)}
+                </button>
+              ))}
+            </nav>
+          )}
+
           {!isSidebarCollapsed && (
-          <nav className="min-h-0 flex-1">
+          <nav className="sidebar-nav">
             <button
               type="button"
               className="new-workspace-button"
@@ -1267,11 +1324,11 @@ export default function App() {
                 stopVoiceConversation();
               }}
             >
-              <Plus size={18} />
+              <Plus size={16} />
               <span>New workspace</span>
             </button>
             <div className="workspace-section-heading">Workspaces</div>
-            <div className="scrollbar-soft max-h-[42vh] space-y-1 overflow-auto pr-1 lg:max-h-[calc(100vh-230px)]">
+            <div className="space-y-0.5">
               {workspaces.map((workspace) => {
                 const isActiveWorkspace = workspace.id === activeWorkspaceId;
                 return (
@@ -1299,7 +1356,7 @@ export default function App() {
                         title="Workspace options"
                         aria-label={`Workspace options for ${workspace.name}`}
                       >
-                        <MoreHorizontal size={18} />
+                        <MoreHorizontal size={16} />
                       </button>
                       {openWorkspaceMenuId === workspace.id && (
                         <div className="workspace-menu" onClick={(event) => event.stopPropagation()}>
@@ -1309,7 +1366,7 @@ export default function App() {
                             onClick={() => void handleDeleteWorkspace(workspace.id)}
                             disabled={busy}
                           >
-                            <Trash2 size={18} />
+                            <Trash2 size={15} />
                             <span>Delete</span>
                           </button>
                         </div>
@@ -1327,16 +1384,17 @@ export default function App() {
                             setWorkspaceView("documents");
                           }}
                         >
-                          <FileUp size={16} />
+                          <FileUp size={15} />
                           <span>Documents</span>
                         </button>
                         <button type="button" className="workspace-child-action" onClick={handleNewConversation}>
-                          <MessageSquarePlus size={16} />
+                          <MessageSquarePlus size={15} />
                           <span>New chat</span>
                         </button>
 
                         {(hasDraftConversation || conversations.length > 0) && (
                           <div className="workspace-conversation-list">
+                            <div className="conversation-group-label">Chats</div>
                             {hasDraftConversation && (
                               <div className="conversation-row-active">
                                 <button className="conversation-title-button" onClick={handleNewConversation} title="New chat">
@@ -1366,7 +1424,7 @@ export default function App() {
                                   title="Conversation options"
                                   aria-label="Conversation options"
                                 >
-                                  <MoreHorizontal size={18} />
+                                  <MoreHorizontal size={16} />
                                 </button>
                                 {openConversationMenuId === conversation.id && (
                                   <div className="conversation-menu" onClick={(event) => event.stopPropagation()}>
@@ -1376,7 +1434,7 @@ export default function App() {
                                       onClick={() => void handleDeleteConversation(conversation.id)}
                                       disabled={busy}
                                     >
-                                      <Trash2 size={18} />
+                                      <Trash2 size={15} />
                                       <span>Delete</span>
                                     </button>
                                   </div>
@@ -1395,10 +1453,12 @@ export default function App() {
           )}
 
           {!isSidebarCollapsed && (
-          <button className="sidebar-logout-button" onClick={handleLogout}>
-            <LogOut size={18} />
-            <span>Log out</span>
-          </button>
+          <div className="sidebar-footer">
+            <button className="sidebar-logout-button" onClick={handleLogout}>
+              <LogOut size={16} />
+              <span>Log out</span>
+            </button>
+          </div>
           )}
         </div>
       </aside>
@@ -1422,6 +1482,8 @@ export default function App() {
                 uploadStage={uploadStage}
                 selectedFileName={selectedFileName}
                 isProcessingDocument={isProcessingDocument}
+                uploadFailed={uploadStage === "failed" && Boolean(failedUpload)}
+                onRetryUpload={retryFailedUpload}
                 voiceState={voiceState}
                 voiceActive={voiceActive}
                 messages={messages}
@@ -1429,6 +1491,7 @@ export default function App() {
                 setQuestion={setQuestion}
                 onMicClick={handleMicClick}
                 onQuestion={handleQuestion}
+                onRetryMessage={handleRetryMessage}
                 notice={notice}
               />
             ) : (
@@ -1437,6 +1500,8 @@ export default function App() {
                 uploadStage={uploadStage}
                 selectedFileName={selectedFileName}
                 onUploadChange={handleUploadChange}
+                uploadFailed={uploadStage === "failed" && Boolean(failedUpload)}
+                onRetryUpload={retryFailedUpload}
                 notice={notice}
               />
             )}
@@ -1477,17 +1542,41 @@ function WorkspaceStart({
   );
 }
 
+function UploadFailureNotice({
+  selectedFileName,
+  onRetryUpload
+}: {
+  selectedFileName: string;
+  onRetryUpload: () => void;
+}) {
+  return (
+    <div className="chat-bubble-retry" role="status">
+      <span>
+        {selectedFileName ? `We could not prepare ${selectedFileName}.` : "We could not prepare that document."}
+      </span>
+      <button type="button" className="chat-retry-button" onClick={onRetryUpload}>
+        <RefreshCw size={13} />
+        <span>Try again</span>
+      </button>
+    </div>
+  );
+}
+
 function UploadCenter({
   busy,
   uploadStage,
   selectedFileName,
   onUploadChange,
+  uploadFailed,
+  onRetryUpload,
   notice
 }: {
   busy: boolean;
   uploadStage: UploadStage;
   selectedFileName: string;
   onUploadChange: (event: FormEvent<HTMLInputElement>) => void;
+  uploadFailed: boolean;
+  onRetryUpload: () => void;
   notice: Notice;
 }) {
   return (
@@ -1507,6 +1596,7 @@ function UploadCenter({
         disabled={busy}
       />
       {uploadStage !== "idle" && <ProgressStepper stage={uploadStage} />}
+      {uploadFailed && <UploadFailureNotice selectedFileName={selectedFileName} onRetryUpload={onRetryUpload} />}
       <NoticeView notice={notice} />
     </section>
   );
@@ -1519,6 +1609,8 @@ function AgentCenter({
   uploadStage,
   selectedFileName,
   isProcessingDocument,
+  uploadFailed,
+  onRetryUpload,
   voiceState,
   voiceActive,
   messages,
@@ -1526,6 +1618,7 @@ function AgentCenter({
   setQuestion,
   onMicClick,
   onQuestion,
+  onRetryMessage,
   notice
 }: {
   busy: boolean;
@@ -1534,6 +1627,8 @@ function AgentCenter({
   uploadStage: UploadStage;
   selectedFileName: string;
   isProcessingDocument: boolean;
+  uploadFailed: boolean;
+  onRetryUpload: () => void;
   voiceState: VoiceState;
   voiceActive: boolean;
   messages: ChatMessage[];
@@ -1541,6 +1636,7 @@ function AgentCenter({
   setQuestion: (value: string) => void;
   onMicClick: () => void;
   onQuestion: (event: FormEvent<HTMLFormElement>) => void;
+  onRetryMessage: (messageId: string, prompt: string) => void;
   notice: Notice;
 }) {
   return (
@@ -1561,6 +1657,11 @@ function AgentCenter({
           <div className="agent-processing-panel" role="status">
             <span className="truncate text-sm font-semibold text-ink">{selectedFileName || "Document"}</span>
             <ProgressStepper stage={uploadStage} />
+          </div>
+        )}
+        {uploadFailed && (
+          <div className="agent-processing-panel">
+            <UploadFailureNotice selectedFileName={selectedFileName} onRetryUpload={onRetryUpload} />
           </div>
         )}
       </div>
@@ -1584,7 +1685,7 @@ function AgentCenter({
         </div>
       ) : (
         <>
-          <ChatTranscript messages={messages} />
+          <ChatTranscript messages={messages} busy={busy} onRetry={onRetryMessage} />
           <ChatComposer
             busy={busy}
             question={question}
@@ -1598,25 +1699,105 @@ function AgentCenter({
   );
 }
 
-function ChatTranscript({ messages }: { messages: ChatMessage[] }) {
+function ChatTranscript({
+  messages,
+  busy,
+  onRetry
+}: {
+  messages: ChatMessage[];
+  busy: boolean;
+  onRetry: (messageId: string, prompt: string) => void;
+}) {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const awaitingAnswer = busy && messages[messages.length - 1]?.role === "user";
+  const isEmpty = messages.length === 0 && !awaitingAnswer;
 
   useEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
     transcript.scrollTop = transcript.scrollHeight;
-  }, [messages]);
+  }, [messages, awaitingAnswer]);
 
   return (
-    <div ref={transcriptRef} className="chat-transcript scrollbar-soft">
-      {messages.map((message) => (
-        <div key={message.id} className={message.role === "user" ? "chat-row-user" : "chat-row-agent"}>
-          <div className={message.role === "user" ? "chat-bubble-user" : "chat-bubble-agent"}>
-            {renderMessageContent(message.content)}
+    <div ref={transcriptRef} className="chat-transcript">
+      <div className={isEmpty ? "chat-column chat-column-empty" : "chat-column"}>
+        {isEmpty && (
+          <div className="chat-empty">
+            <p className="chat-empty-title">Ask your documents</p>
+            <p className="chat-empty-hint">
+              Answers come from this workspace&apos;s wiki, with the source documents cited underneath.
+            </p>
           </div>
-        </div>
-      ))}
+        )}
+        {messages.map((message) =>
+          message.role === "user" ? (
+            <div key={message.id} className="chat-row-user">
+              <div className="chat-bubble-user">{renderMessageContent(message.content)}</div>
+            </div>
+          ) : message.tone === "error" ? (
+            <div key={message.id} className="chat-row-agent">
+              <div className="chat-bubble-retry" role="status">
+                <span>{message.content}</span>
+                {message.retryPrompt && (
+                  <button
+                    type="button"
+                    className="chat-retry-button"
+                    onClick={() => onRetry(message.id, message.retryPrompt as string)}
+                  >
+                    <RefreshCw size={13} />
+                    <span>Retry</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div key={message.id} className="chat-row-agent group/message">
+              <div className="chat-bubble-agent">{renderMessageContent(message.content)}</div>
+              <div className="chat-message-actions">
+                <CopyMessageButton content={message.content} />
+              </div>
+            </div>
+          )
+        )}
+        {awaitingAnswer && (
+          <div className="chat-row-agent">
+            <div className="chat-thinking" role="status" aria-label="Thinking">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function CopyMessageButton({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <button
+      type="button"
+      className="chat-action-button"
+      aria-label="Copy answer"
+      title="Copy answer"
+      onClick={() => {
+        void navigator.clipboard?.writeText(content).then(
+          () => setCopied(true),
+          () => undefined
+        );
+      }}
+    >
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+      <span>{copied ? "Copied" : "Copy"}</span>
+    </button>
   );
 }
 
@@ -1651,26 +1832,31 @@ function ChatComposer({
   }, [question]);
 
   return (
-    <form onSubmit={onQuestion} className="chat-composer">
-      <textarea
-        ref={textareaRef}
-        className="chat-composer-input scrollbar-soft"
-        value={question}
-        onChange={(event) => setQuestion(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            event.currentTarget.form?.requestSubmit();
-          }
-        }}
-        placeholder="Ask anything"
-        aria-label="Ask"
-        rows={1}
-      />
-      <button className="composer-send" disabled={busy || !question.trim()} title="Send">
-        <ArrowUp size={22} strokeWidth={2.6} />
-      </button>
-    </form>
+    <div className="chat-composer-wrap">
+      <div className="chat-composer-column">
+        <form onSubmit={onQuestion} className="chat-composer">
+          <textarea
+            ref={textareaRef}
+            className="chat-composer-input scrollbar-soft"
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Ask anything"
+            aria-label="Ask"
+            rows={1}
+          />
+          <button className="composer-send" disabled={busy || !question.trim()} title="Send">
+            <ArrowUp size={18} strokeWidth={2.4} />
+          </button>
+        </form>
+        <p className="composer-hint">Enter to send &middot; Shift + Enter for a new line</p>
+      </div>
+    </div>
   );
 }
 
@@ -1720,6 +1906,31 @@ function conversationTitle(conversation: ConversationSummary) {
   return conversation.mode === "voice" ? "Voice chat" : "New chat";
 }
 
+const recoverableServiceErrors = [
+  "AI service is currently unavailable",
+  "Speech recognition is currently unavailable",
+  "Voice playback is currently unavailable",
+  "Voice service is currently unavailable",
+  // A dropped connection mid-turn is recoverable too: the next turn usually works.
+  CONNECTION_INTERRUPTED_MESSAGE
+];
+
+export function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isRecoverableServiceError(message: string) {
+  return recoverableServiceErrors.some((prefix) => message.startsWith(prefix));
+}
+
+function makeRetryableMessage(retryPrompt?: string): ChatMessage {
+  return {
+    ...makeMessage("assistant", "That answer did not come through. Give it another go."),
+    tone: "error",
+    retryPrompt
+  };
+}
+
 function makeMessage(role: ChatMessage["role"], content: string): ChatMessage {
   return {
     id: `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -1730,4 +1941,11 @@ function makeMessage(role: ChatMessage["role"], content: string): ChatMessage {
 
 function formatVoiceState(state: VoiceState) {
   return state.charAt(0).toUpperCase() + state.slice(1);
+}
+
+function workspaceInitials(name: string) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "W";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }

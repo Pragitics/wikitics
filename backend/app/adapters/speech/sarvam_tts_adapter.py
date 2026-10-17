@@ -1,7 +1,7 @@
 import base64
 from collections.abc import Iterator
 import json
-from threading import RLock
+from threading import Lock
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -48,7 +48,7 @@ class SarvamTTSAdapter:
         self.last_stream_transport = "none"
         self._websocket: ClientConnection | None = None
         self._websocket_language_code: str | None = None
-        self._websocket_lock = RLock()
+        self._websocket_lock = Lock()
 
     def synthesize(self, text: str) -> bytes:
         def operation() -> bytes:
@@ -107,7 +107,11 @@ class SarvamTTSAdapter:
             raise RuntimeError(VOICE_PLAYBACK_UNAVAILABLE) from exc
 
     def close_websocket(self) -> None:
-        with self._websocket_lock:
+        # Bounded acquire: this runs on the failure path, where the lock may still be
+        # held by a turn that is going away. Dropping the socket matters more than
+        # taking the lock, so proceed either way rather than block the request.
+        acquired = self._websocket_lock.acquire(timeout=1.0)
+        try:
             websocket = self._websocket
             self._websocket = None
             self._websocket_language_code = None
@@ -116,6 +120,9 @@ class SarvamTTSAdapter:
                     websocket.close()
                 except WebSocketException:
                     return
+        finally:
+            if acquired:
+                self._release_websocket_lock()
 
     def payload(self, text: str) -> dict:
         payload = {
@@ -159,8 +166,19 @@ class SarvamTTSAdapter:
         return f"{self.url.rstrip('/')}/stream"
 
     def _stream_synthesize_websocket(self, text: str) -> Iterator[bytes]:
+        """Stream audio for one segment over the shared provider socket.
+
+        The lock is held across yields, so it must survive being released from a
+        different thread: an abandoned voice turn (barge-in, client disconnect) is
+        closed by the garbage collector, not by the thread that acquired it. A plain
+        Lock allows that; an RLock would refuse and stay held forever, wedging every
+        later turn. Acquisition is bounded so a wedged socket degrades to the HTTP
+        fallback instead of hanging the request.
+        """
         language_code = resolve_tts_language_code(text, self.target_language_code)
-        with self._websocket_lock:
+        if not self._websocket_lock.acquire(timeout=self.websocket_timeout_seconds):
+            raise ValueError("Sarvam TTS WebSocket is busy")
+        try:
             websocket = self._ensure_websocket(language_code)
             for chunk in text_message_chunks(text):
                 websocket.send(json.dumps({"type": "text", "data": {"text": chunk}}))
@@ -179,6 +197,14 @@ class SarvamTTSAdapter:
                     raise ValueError(message["message"])
             if not yielded:
                 raise ValueError("Sarvam WebSocket TTS returned no audio")
+        finally:
+            self._release_websocket_lock()
+
+    def _release_websocket_lock(self) -> None:
+        try:
+            self._websocket_lock.release()
+        except RuntimeError:
+            return
 
     def _ensure_websocket(self, language_code: str | None = None) -> ClientConnection:
         resolved_language = language_code or self.target_language_code

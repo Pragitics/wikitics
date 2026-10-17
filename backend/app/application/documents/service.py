@@ -1,7 +1,8 @@
 import hashlib
 import json
+import logging
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import PurePosixPath
 
 from fastapi import HTTPException, UploadFile, status
@@ -20,7 +21,14 @@ from app.infrastructure.db.models import (
 from app.shared.ids import new_id
 from app.shared.metrics import metrics
 from app.shared.retry import retry_call
-from app.shared.user_errors import DOCUMENT_PROCESSING_FAILED, DOCUMENT_PROCESSING_UNAVAILABLE
+from app.shared.user_errors import (
+    DOCUMENT_NO_READABLE_TEXT,
+    DOCUMENT_PROCESSING_FAILED,
+    DOCUMENT_PROCESSING_UNAVAILABLE,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentService:
@@ -151,6 +159,15 @@ class DocumentService:
             }
         except Exception as exc:
             metrics.increment("documents.processing_failures")
+            # The user-facing message is deliberately generic, so log the real cause
+            # here - otherwise a failed upload is undiagnosable from the logs.
+            logger.exception(
+                "Document processing failed: document_id=%s file_type=%s status=%s cause=%s",
+                document.id,
+                document.file_type,
+                document.status,
+                type(exc).__name__,
+            )
             document.status = DocumentStatus.FAILED.value
             document.error_message = _soft_processing_error(exc)
             self.db.commit()
@@ -228,28 +245,54 @@ class DocumentService:
         return {"text_storage_path": text_path, "metadata_storage_path": metadata_path}
 
     def _apply_pdf_ocr_if_needed(self, document: DocumentModel, raw_content: bytes, extracted: ExtractedDocument) -> ExtractedDocument:
+        """Fill in pages with no text layer using OCR.
+
+        OCR is an enhancement, not a gate: a PDF whose other pages carry readable text
+        is still worth indexing, so a failure here degrades to what the parser found
+        instead of rejecting the whole upload. Only a document with no readable text
+        anywhere has nothing to build a wiki from.
+        """
         if document.file_type != "pdf":
             return extracted
         required_pages = list(extracted.metadata.get("ocr_required_pages") or [])
         if not required_pages:
             return extracted
+
+        result = None
+        failure = None
         if self.ocr is None:
-            raise RuntimeError(DOCUMENT_PROCESSING_FAILED)
-        try:
-            result = metrics.time(
-                "document.ocr_seconds",
-                lambda: retry_call(
-                    lambda: self.ocr.extract_pdf(document.id, document.filename, raw_content, required_pages),
-                    attempts=1,
-                ),
-            )
-        except Exception as exc:
-            raise RuntimeError(DOCUMENT_PROCESSING_FAILED) from exc
-        if result is None:
-            raise RuntimeError(DOCUMENT_PROCESSING_FAILED)
-        if result.metadata.get("ocr_status") in {"failed", "empty", "skipped_page_limit"} or not result.pages:
-            raise RuntimeError(DOCUMENT_PROCESSING_FAILED)
-        return merge_ocr_result(extracted, result)
+            failure = "not_configured"
+        else:
+            try:
+                result = metrics.time(
+                    "document.ocr_seconds",
+                    lambda: retry_call(
+                        lambda: self.ocr.extract_pdf(document.id, document.filename, raw_content, required_pages),
+                        attempts=1,
+                    ),
+                )
+            except Exception:
+                logger.exception("OCR failed: document_id=%s pages=%s", document.id, required_pages)
+                failure = "error"
+
+        if result is not None and result.pages and result.metadata.get("ocr_status") not in {
+            "failed",
+            "empty",
+            "skipped_page_limit",
+        }:
+            return merge_ocr_result(extracted, result)
+
+        if failure is None:
+            failure = str((result.metadata.get("ocr_status") if result is not None else None) or "empty")
+        if not _has_readable_text(extracted):
+            raise RuntimeError(DOCUMENT_NO_READABLE_TEXT)
+        logger.warning(
+            "OCR unavailable, indexing the text pages only: document_id=%s reason=%s pages=%s",
+            document.id,
+            failure,
+            required_pages,
+        )
+        return _with_metadata(extracted, {"ocr_status": failure, "ocr_degraded": True})
 
     def _save_wiki_bundle(self, document: DocumentModel, bundle) -> list[WikiPageModel]:
         wiki_root = PurePosixPath("wiki") / document.workspace_id
@@ -383,9 +426,17 @@ def _safe_filename(filename: str) -> str:
 
 def _soft_processing_error(exc: Exception) -> str:
     message = str(exc)
-    if message in {DOCUMENT_PROCESSING_FAILED, DOCUMENT_PROCESSING_UNAVAILABLE}:
+    if message in {DOCUMENT_PROCESSING_FAILED, DOCUMENT_PROCESSING_UNAVAILABLE, DOCUMENT_NO_READABLE_TEXT}:
         return message
     return DOCUMENT_PROCESSING_FAILED
+
+
+def _has_readable_text(extracted: ExtractedDocument) -> bool:
+    return any((page.text or "").strip() for page in extracted.pages)
+
+
+def _with_metadata(extracted: ExtractedDocument, updates: dict) -> ExtractedDocument:
+    return replace(extracted, metadata={**extracted.metadata, **updates})
 
 
 def _wiki_model_to_entity(model: WikiPageModel):

@@ -1,101 +1,51 @@
 # Wikitics
 
-Wikitics is a wiki-first document question-answering application. Users upload documents, the backend extracts source content, generates a wiki-style knowledge layer, indexes wiki and raw chunks, and answers text or voice questions with citations.
+Wikitics turns uploaded documents into a searchable workspace wiki. It extracts document content, generates linked wiki pages, and answers text or voice questions with source citations.
 
-The detailed product and architecture source of truth is [`wikitics_detailed_technical_plan.md`](./wikitics_detailed_technical_plan.md). The implementation tracker is [`wikitics_phase_implementation_checklist.md`](./wikitics_phase_implementation_checklist.md).
+## Highlights
 
-## Local Docker Setup
+- Upload PDF, DOCX, and text documents
+- Build a workspace-specific wiki from source material
+- Ask cited questions across documents and wiki pages
+- Continue conversations with memory-aware answers
+- Use text or voice interactions
 
-1. Copy the environment template:
+## Stack
 
-   ```bash
-   cp .env.example .env
-   ```
+- Frontend: React, TypeScript, Vite, Tailwind CSS
+- Backend: FastAPI, SQLAlchemy, PostgreSQL
+- AI services: OpenRouter and Sarvam
+- Realtime voice: LiveKit
+- Local development: Docker Compose
 
-2. Start the stack:
+## Run locally
 
-   ```bash
-   docker compose up --build
-   ```
-
-3. Open the app:
-
-   ```text
-   Frontend: http://localhost:5173
-   Backend API: http://localhost:8000/docs
-   Qdrant: http://localhost:6333/dashboard
-   MinIO: http://localhost:9001
-   ```
-
-## Development Commands
-
-Backend tests:
+Prerequisites: Docker Desktop and Docker Compose.
 
 ```bash
-cd backend
+cp .env.example .env
+docker compose up --build
+```
+
+Open the app at [http://localhost:5173](http://localhost:5173). The API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
+
+Add valid `OPENROUTER_API_KEY` and `SARVAM_API_KEY` values to `.env` to enable AI-powered wiki generation and voice features.
+
+## Development
+
+```bash
+# Frontend
+cd frontend
+npm install
+npm run dev
+
+# Backend tests
+cd ../backend
 pytest
 ```
 
-Frontend build:
+## Deployment
 
-```bash
-cd frontend
-npm install
-npm run build
-```
+The frontend can be deployed to Vercel from the `frontend` directory. Configure `VITE_API_BASE_URL` in Vercel with the public URL of the deployed backend.
 
-Agent worker smoke test:
-
-```bash
-cd agent-worker
-python -m compileall .
-```
-
-Latency benchmark against a running Docker stack:
-
-```bash
-python3 scripts/benchmark_latency.py \
-  --base-url http://localhost:8000 \
-  --email you@example.com \
-  --password password123 \
-  --workspace-name "Your Workspace" \
-  --max-text-seconds 10 \
-  --max-voice-seconds 15 \
-  --max-voice-first-audio-seconds 2 \
-  --max-llm-seconds 8 \
-  --pretty
-```
-
-OpenRouter model benchmark for voice-style answers:
-
-```bash
-set -a; source .env; set +a
-backend/.venv/bin/python scripts/benchmark_openrouter_models.py \
-  --base-url http://localhost:8000 \
-  --email you@example.com \
-  --password password123 \
-  --workspace-name "Your Workspace" \
-  --models auto \
-  --auto-limit 3 \
-  --max-first-delta-seconds 5 \
-  --max-total-seconds 12 \
-  --min-quality-score 50 \
-  --pretty
-```
-
-## Architecture
-
-The backend follows the DDD and hexagonal architecture in the technical plan:
-
-```text
-backend/app/
-  domain/
-  application/
-  ports/
-  adapters/
-  infrastructure/
-  interfaces/
-  shared/
-```
-
-External systems are kept behind adapters. Docker development uses local deterministic fallbacks where possible, while keeping provider boundaries for Qdrant, OpenRouter, Sarvam, LiveKit, and S3-compatible storage.
+The backend requires a persistent PostgreSQL database, persistent object storage, and the service credentials defined in `.env`; deploy it to a service that supports long-running Python applications and configure its environment there.

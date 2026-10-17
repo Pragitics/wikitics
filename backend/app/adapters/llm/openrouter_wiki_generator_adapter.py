@@ -40,7 +40,20 @@ class OpenRouterWikiGeneratorAdapter:
                 return self._bundle_from_pages_data(workspace_id, document, existing_pages, data)
             action = str(data.get("action") or "").strip().lower()
             if not action:
-                raise RuntimeError(DOCUMENT_PROCESSING_UNAVAILABLE)
+                # One off-spec reply should not fail the whole upload: hand the model
+                # its mistake and let it correct itself on the next turn, the same way
+                # a rejected tool call is handled below.
+                error_result = {
+                    "error": "Your reply needs either an \"action\" field naming the tool to call, or a \"pages\" field with the finished wiki pages."
+                }
+                action_log.append({"action": None, "page_id": None, "tool_result": error_result})
+                messages.extend(
+                    [
+                        {"role": "assistant", "content": json.dumps(data, ensure_ascii=True)},
+                        {"role": "user", "content": json.dumps({"tool_result": error_result}, ensure_ascii=True)},
+                    ]
+                )
+                continue
 
             if action == "finish":
                 if not changed_page_ids:

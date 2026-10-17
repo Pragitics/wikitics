@@ -5,13 +5,13 @@ from queue import Queue
 from threading import Thread
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from app.application.voice.service import VoiceSessionService
-from app.application.qa.service import QAService, shape_voice_answer
+from app.application.qa.service import QAService
 from app.infrastructure.settings import Settings
 from app.infrastructure.db.models import UserModel
 from app.infrastructure.db.session import SessionLocal, get_db
@@ -133,6 +133,7 @@ def stream_with_voice_transcript(
 async def ask_with_voice_audio(
     session_id: str,
     file: UploadFile = File(...),
+    voice_style: str = Form("auto"),
     service: VoiceSessionService = Depends(voice_service),
     qa: QAService = Depends(qa_service),
     stt=Depends(stt_dependency),
@@ -159,6 +160,7 @@ async def ask_with_voice_audio(
             question=transcript,
             conversation_id=session.conversation_id,
             mode="voice",
+            voice_style_preference=voice_style,
         )
         response_audio = _time_stage(trace, "tts", lambda: tts.synthesize(answer["answer"]))
         return answer, response_audio
@@ -174,6 +176,7 @@ async def ask_with_voice_audio(
 async def stream_with_voice_audio(
     session_id: str,
     file: UploadFile = File(...),
+    voice_style: str = Form("auto"),
     service: VoiceSessionService = Depends(voice_service),
     qa: QAService = Depends(qa_service),
     stt=Depends(stt_dependency),
@@ -196,7 +199,7 @@ async def stream_with_voice_audio(
             yield sse_event("error", {"type": "error", "message": "No speech detected"})
             return
         yield sse_event("transcript", {"type": "transcript", "transcript": transcript, "voice_latency": trace})
-        yield from voice_answer_stream_events(transcript, session, user, qa, tts, trace)
+        yield from voice_answer_stream_events(transcript, session, user, qa, tts, trace, voice_style)
 
     return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -241,7 +244,7 @@ def voice_answer_stream_events(
     audio_started = False
     audio_bytes = 0
     first_audio_at = None
-    spoken_segments: list[str] = []
+    spoken_text = ""
     pending_text = ""
     final_answer: dict | None = None
     stream_failed = False
@@ -317,11 +320,11 @@ def voice_answer_stream_events(
             continue
         if event_type == "answer_delta":
             pending_text += str(event.get("delta") or "")
-            while len(spoken_segments) < voice_segment_limit(transcript):
-                segment, pending_text = pop_ready_voice_segment(pending_text, transcript)
+            while True:
+                segment, pending_text = pop_ready_voice_segment(pending_text)
                 if not segment:
                     break
-                spoken_segments.append(segment)
+                spoken_text = f"{spoken_text} {segment}".strip()
                 yield from emit_tts_segment(segment)
                 if stream_failed:
                     return
@@ -334,9 +337,9 @@ def voice_answer_stream_events(
         yield sse_event("error", {"type": "error", "message": AI_SERVICE_UNAVAILABLE})
         return
 
-    remaining_segment = remaining_voice_segment(str(final_answer.get("answer") or ""), spoken_segments)
+    remaining_segment = remaining_voice_segment(str(final_answer.get("answer") or ""), spoken_text, pending_text)
     if remaining_segment:
-        spoken_segments.append(remaining_segment)
+        spoken_text = f"{spoken_text} {remaining_segment}".strip()
         yield from emit_tts_segment(remaining_segment)
         if stream_failed:
             return
@@ -365,36 +368,32 @@ def voice_answer_stream_events(
     yield sse_event("final", {"type": "final", **payload})
 
 
-def pop_ready_voice_segment(buffer: str, transcript: str) -> tuple[str | None, str]:
-    match = re.search(r"(?<=[.!?])\s+", buffer)
+def pop_ready_voice_segment(buffer: str) -> tuple[str | None, str]:
+    """Split off the next complete sentence so TTS can start before the answer finishes.
+
+    This only chunks for streaming; it never edits or shortens what the model wrote.
+    """
+    match = re.search(r"(?<=[\.!?।॥])\s+", buffer)
     if match:
         end = match.end()
-    elif buffer.rstrip().endswith((".", "!", "?")):
+    elif buffer.rstrip().endswith((".", "!", "?", "।", "॥")):
         end = len(buffer)
     else:
         return None, buffer
-    raw_segment = buffer[:end].strip()
-    pending = buffer[end:].lstrip()
-    return shape_voice_answer(raw_segment, transcript), pending
+    return buffer[:end].strip(), buffer[end:].lstrip()
 
 
-def voice_segment_limit(transcript: str) -> int:
-    transcript_lower = transcript.lower()
-    wants_one_sentence = "one sentence" in transcript_lower or "short" in transcript_lower or "quick" in transcript_lower
-    teaching_request = bool(re.search(r"\b(learn|understand|explain|teach|why|how|walk me through)\b", transcript_lower))
-    return 1 if wants_one_sentence or not teaching_request else 2
-
-
-def remaining_voice_segment(answer: str, spoken_segments: list[str]) -> str:
+def remaining_voice_segment(answer: str, spoken_text: str, pending_text: str = "") -> str:
+    """Everything from the final answer that has not been spoken yet."""
     final_text = compact_text(answer)
-    spoken = compact_text(" ".join(spoken_segments))
+    spoken = compact_text(spoken_text)
     if not final_text:
         return ""
     if not spoken:
         return final_text
     if final_text.startswith(spoken):
-        return final_text[len(spoken) :].lstrip(" .,!?:;")
-    return ""
+        return final_text[len(spoken) :].strip()
+    return compact_text(pending_text)
 
 
 def compact_text(value: str) -> str:

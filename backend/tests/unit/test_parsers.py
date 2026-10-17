@@ -119,3 +119,58 @@ def test_merge_ocr_result_fills_blank_pdf_pages():
     assert merged.metadata["ocr_status"] == "completed"
     assert merged.metadata["ocr_completed_pages"] == [1]
     assert merged.metadata["_ocr_raw_payload"]["pages"][0]["text"] == "Scanned OCR text"
+
+
+def _pdf_document(pages, ocr_required):
+    from app.domain.documents.entities import ExtractedDocument, ExtractedPage
+
+    return ExtractedDocument(
+        document_id="doc-1",
+        filename="scan.pdf",
+        file_type="pdf",
+        pages=[ExtractedPage(page_number=i, text=t) for i, t in enumerate(pages, start=1)],
+        metadata={"ocr_required_pages": ocr_required, "ocr_status": "required_not_configured"},
+    )
+
+
+def _service_with_failing_ocr():
+    from app.application.documents.service import DocumentService
+
+    class FailingOCR:
+        def extract_pdf(self, *args, **kwargs):
+            raise RuntimeError("provider down")
+
+    service = DocumentService.__new__(DocumentService)
+    service.ocr = FailingOCR()
+    return service
+
+
+def test_ocr_failure_keeps_the_pages_that_already_had_text():
+    from app.infrastructure.db.models import DocumentModel
+
+    service = _service_with_failing_ocr()
+    document = DocumentModel(id="doc-1", filename="scan.pdf", file_type="pdf")
+    # Page 2 has no text layer and OCR is down, but page 1 is perfectly readable.
+    extracted = _pdf_document(["Payment terms are 30 days.", ""], [2])
+
+    result = service._apply_pdf_ocr_if_needed(document, b"%PDF-", extracted)
+
+    assert result.pages[0].text == "Payment terms are 30 days."
+    assert result.metadata["ocr_degraded"] is True
+    assert result.metadata["ocr_status"] == "error"
+
+
+def test_document_with_no_readable_text_anywhere_reports_that_specifically():
+    import pytest
+
+    from app.infrastructure.db.models import DocumentModel
+    from app.shared.user_errors import DOCUMENT_NO_READABLE_TEXT
+
+    service = _service_with_failing_ocr()
+    document = DocumentModel(id="doc-1", filename="scan.pdf", file_type="pdf")
+    extracted = _pdf_document(["", ""], [1, 2])
+
+    with pytest.raises(RuntimeError) as error:
+        service._apply_pdf_ocr_if_needed(document, b"%PDF-", extracted)
+
+    assert str(error.value) == DOCUMENT_NO_READABLE_TEXT

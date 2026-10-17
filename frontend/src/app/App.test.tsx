@@ -96,9 +96,9 @@ describe("App", () => {
     mockedApi.workspaces.mockResolvedValue([{ id: "workspace-2", name: "Workspace", owner_id: "user-2" }]);
     renderApp("/login");
 
-    fireEvent.change(screen.getByPlaceholderText("Email"), { target: { value: "user@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("Email address"), { target: { value: "user@example.com" } });
     fireEvent.change(screen.getByPlaceholderText("Password"), { target: { value: "password123" } });
-    fireEvent.click(screen.getAllByRole("button", { name: "Log in" })[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => expect(mockedApi.login).toHaveBeenCalledWith("user@example.com", "password123"));
     expect(storeFns.setSession).toHaveBeenCalled();

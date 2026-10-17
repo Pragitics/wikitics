@@ -1199,30 +1199,20 @@ export default function App() {
   }
 
   if (!token || !user) {
+    const isRegistering = authMode === "register";
     return (
-      <main className="flex min-h-screen items-center justify-center bg-paper px-4 py-8">
-        <form onSubmit={handleAuth} className="grid w-full max-w-sm gap-4 rounded-md border border-slate-200 bg-white p-6 shadow-sm">
-          <h1 className="text-2xl font-semibold text-ink">Wikitics</h1>
-          <div className="grid grid-cols-2 rounded-md bg-slate-100 p-1">
-            <button
-              type="button"
-              className={authMode === "login" ? "auth-tab-active" : "auth-tab"}
-              onClick={() => setAuthMode("login")}
-            >
-              Log in
-            </button>
-            <button
-              type="button"
-              className={authMode === "register" ? "auth-tab-active" : "auth-tab"}
-              onClick={() => setAuthMode("register")}
-            >
-              Register
-            </button>
+      <main className="auth-page">
+        <form onSubmit={handleAuth} className="auth-flow">
+          <header className="auth-heading">
+            <h1>Wikitics</h1>
+          </header>
+
+          <div className="auth-fields">
+            {isRegistering && <input className="auth-field" name="name" placeholder="Your name" autoComplete="name" required />}
+            <input className="auth-field" name="email" placeholder="Email address" type="email" autoComplete="email" required />
           </div>
-          {authMode === "register" && <input className="field" name="name" placeholder="Name" autoComplete="name" />}
-          <input className="field" name="email" placeholder="Email" type="email" autoComplete="email" required />
           <input
-            className="field"
+            className="auth-field"
             name="password"
             placeholder="Password"
             type="password"
@@ -1230,9 +1220,20 @@ export default function App() {
             autoComplete={authMode === "register" ? "new-password" : "current-password"}
             required
           />
-          <button className="command-button h-11" disabled={busy}>
-            {authMode === "register" ? "Register" : "Log in"}
+          <button className="auth-continue-button" disabled={busy}>
+            {isRegistering ? "Create account" : "Continue"}
           </button>
+          <div className="auth-divider" aria-hidden="true">
+            <span />
+            <span>or</span>
+            <span />
+          </div>
+          <p className="auth-switch">
+            {isRegistering ? "Already have an account?" : "New to Wikitics?"}
+            <button type="button" onClick={() => setAuthMode(isRegistering ? "login" : "register")}>
+              {isRegistering ? "Sign in" : "Create an account"}
+            </button>
+          </p>
           <NoticeView notice={notice} />
         </form>
       </main>

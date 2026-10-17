@@ -71,6 +71,135 @@ textarea {
   @apply rounded-[9px] bg-white px-5 py-2.5 text-sm font-semibold text-ink shadow-[0_1px_2px_rgb(56_73_89/8%)] ring-1 ring-hairline;
 }
 
+/* ---------------------------------------------------------------- login */
+
+.auth-page {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #fff;
+}
+
+.auth-flow {
+  display: grid;
+  width: min(100%, 23rem);
+  gap: 12px;
+}
+
+.auth-heading {
+  display: grid;
+  justify-items: center;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.auth-heading h1 {
+  margin: 0;
+  font-family: "Instrument Serif", ui-serif, Georgia, serif;
+  font-size: 2.2rem;
+  line-height: 1;
+  letter-spacing: -0.025em;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.auth-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-field {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid #d9dde5;
+  border-radius: 10px;
+  background: #fff;
+  padding: 0 16px;
+  color: #121a2d;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.auth-field::placeholder {
+  color: #929292;
+}
+
+.auth-field:focus {
+  border-color: #121a2d;
+  box-shadow: 0 0 0 4px rgb(18 26 45 / 8%);
+}
+
+.auth-continue-button {
+  min-height: 52px;
+  border-radius: 10px;
+  background: #121a2d;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  box-shadow: 0 16px 30px rgb(18 26 45 / 14%);
+  transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.auth-continue-button:hover:not(:disabled) {
+  background: #1d2940;
+  box-shadow: 0 18px 34px rgb(18 26 45 / 20%);
+  transform: translateY(-1px);
+}
+
+.auth-continue-button:focus-visible,
+.auth-switch button:focus-visible {
+  outline: 3px solid rgb(136 189 242 / 70%);
+  outline-offset: 3px;
+}
+
+.auth-continue-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.auth-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+  margin-top: 10px;
+  color: #929292;
+  font-size: 1rem;
+}
+
+.auth-divider span:not(:nth-child(2)) {
+  height: 1px;
+  background: #e3e3e3;
+}
+
+.auth-switch {
+  margin: 0;
+  text-align: center;
+  color: #707784;
+  font-size: 0.98rem;
+}
+
+.auth-switch button {
+  margin-left: 7px;
+  color: #121a2d;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: #b9c0cb;
+  text-underline-offset: 4px;
+}
+
+@media (max-width: 560px) {
+  .auth-page {
+    padding: 24px 20px;
+  }
+
+  .auth-heading {
+    margin-bottom: 16px;
+  }
+}
+
 /* ---------------------------------------------------------------- sidebar */
 
 .sidebar-shell {
